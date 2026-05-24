@@ -85,8 +85,8 @@ fn body(
         .min_h_0()
         .items_start()
         .justify_center()
-        .gap_10()
-        .p_8()
+        .gap_6()
+        .p_6()
         .child(mouse_model.clone())
         .child(
             v_flex()

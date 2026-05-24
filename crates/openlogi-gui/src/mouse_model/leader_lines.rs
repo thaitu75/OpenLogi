@@ -10,10 +10,18 @@ use crate::data::mouse_buttons::{ButtonId, Hotspot};
 use crate::theme::ACCENT_BLUE;
 
 /// Length of the horizontal stub before turning toward the label.
-const STUB: f32 = 32.;
+const STUB: f32 = 28.;
+/// Horizontal distance from the stub to the label anchor.
+const LEAD_RUN: f32 = 140.;
 
-/// Which side of the mouse a label sits on.
+/// Which side of the mouse a label sits on. `Right` is unused in the current
+/// view (the right half of the window is reserved for the DPI / gesture
+/// column) but the routing logic is kept so labels can move later.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "Right variant kept for future right-side labelling"
+)]
 pub enum Side {
     Left,
     Right,
@@ -23,13 +31,16 @@ pub enum Side {
 pub struct Label {
     pub id: ButtonId,
     pub side: Side,
-    /// Y of the label anchor, in mouse-canvas coords.
+    /// Y of the label anchor, in mouse-canvas coords (i.e. relative to the
+    /// canvas's top-left, not the mouse silhouette's top-left).
     pub y: f32,
 }
 
 /// Paint every leader line. `mouse_origin` is the top-left of the mouse
-/// silhouette inside the canvas; hotspot coords are mouse-local, label
-/// coords are canvas-local.
+/// silhouette in *canvas-local* coords; hotspot coords are mouse-local;
+/// label `y` is canvas-local. Everything is converted to window-absolute
+/// before being handed to `PathBuilder` — `paint_path` expects absolute
+/// coordinates and there is no implicit canvas-to-window transform.
 pub fn paint(
     canvas_bounds: Bounds<Pixels>,
     mouse_origin: Point<Pixels>,
@@ -44,7 +55,7 @@ pub fn paint(
             continue;
         };
         paint_one(
-            canvas_bounds,
+            canvas_bounds.origin,
             mouse_origin,
             mouse_w,
             *hotspot,
@@ -56,48 +67,46 @@ pub fn paint(
 }
 
 fn paint_one(
-    canvas_bounds: Bounds<Pixels>,
-    mouse_origin: Point<Pixels>,
+    canvas_screen_origin: Point<Pixels>,
+    mouse_origin_local: Point<Pixels>,
     mouse_w: f32,
     hotspot: Hotspot,
     label: Label,
     highlight: bool,
     window: &mut Window,
 ) {
-    let (hx, hy) = hotspot.center();
-    // Hotspot centre in canvas-local coords (the path is painted with
-    // origin = canvas_bounds.origin removed).
-    let hotspot_centre = mouse_origin + point(px(hx), px(hy));
+    // Mouse silhouette's top-left in window-absolute coords. Every other
+    // coordinate is derived from this so we don't accidentally mix
+    // coordinate systems again.
+    let mouse_screen = canvas_screen_origin + mouse_origin_local;
 
-    // Where the polyline turns horizontally outward before angling toward
-    // the label anchor.
+    let (hx, hy) = hotspot.center();
+    let hotspot_centre = mouse_screen + point(px(hx), px(hy));
+
     let (stub_x, anchor_x) = match label.side {
         Side::Left => (
-            mouse_origin.x + px(0.) - px(STUB),
-            mouse_origin.x - px(STUB) - px(160.),
+            mouse_screen.x - px(STUB),
+            mouse_screen.x - px(STUB) - px(LEAD_RUN),
         ),
         Side::Right => (
-            mouse_origin.x + px(mouse_w) + px(STUB),
-            mouse_origin.x + px(mouse_w) + px(STUB) + px(160.),
+            mouse_screen.x + px(mouse_w) + px(STUB),
+            mouse_screen.x + px(mouse_w) + px(STUB) + px(LEAD_RUN),
         ),
     };
-    let stub_y = hotspot_centre.y;
-    let anchor_y = mouse_origin.y + px(label.y);
-
     let stub = Point {
         x: stub_x,
-        y: stub_y,
+        y: hotspot_centre.y,
     };
     let anchor = Point {
         x: anchor_x,
-        y: anchor_y,
+        y: mouse_screen.y + px(label.y),
     };
 
-    let width = if highlight { px(2.5) } else { px(1.) };
+    let width = if highlight { px(2.) } else { px(1.) };
     let mut path = PathBuilder::stroke(width);
-    path.move_to(hotspot_centre - canvas_bounds.origin);
-    path.line_to(stub - canvas_bounds.origin);
-    path.line_to(anchor - canvas_bounds.origin);
+    path.move_to(hotspot_centre);
+    path.line_to(stub);
+    path.line_to(anchor);
 
     if let Ok(built) = path.build() {
         if highlight {
@@ -105,7 +114,7 @@ fn paint_one(
         } else {
             // Muted gray — readable against the dark background without
             // competing with the highlighted line.
-            window.paint_path(built, hsla(0., 0., 0.5, 0.45));
+            window.paint_path(built, hsla(0., 0., 0.55, 0.35));
         }
     }
 }

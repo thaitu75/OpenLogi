@@ -142,10 +142,12 @@ impl Render for GesturePad {
     }
 }
 
-/// Canvas paint callback. `points` were captured in window coordinates;
-/// subtract `bounds.origin` to redraw inside the pad.
+/// Canvas paint callback. `points` are already in window-absolute coords
+/// (that's what `MouseDownEvent::position` gives us) and `paint_path` also
+/// expects window-absolute coords, so no transform is needed. The `bounds`
+/// argument is used only to clip via the content mask `paint_path` applies.
 fn paint_path(
-    bounds: gpui::Bounds<Pixels>,
+    _bounds: gpui::Bounds<Pixels>,
     points: &[Point<Pixels>],
     window: &mut Window,
     _app: &mut gpui::App,
@@ -154,9 +156,9 @@ fn paint_path(
         return;
     }
     let mut path = PathBuilder::stroke(px(3.));
-    path.move_to(points[0] - bounds.origin);
+    path.move_to(points[0]);
     for p in &points[1..] {
-        path.line_to(*p - bounds.origin);
+        path.line_to(*p);
     }
     if let Ok(p) = path.build() {
         window.paint_path(p, rgb(ACCENT_BLUE));

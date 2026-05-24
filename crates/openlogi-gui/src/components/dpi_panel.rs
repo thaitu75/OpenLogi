@@ -23,10 +23,11 @@ use crate::state::AppState;
 use crate::theme::{ACCENT_BLUE, BORDER, SURFACE, TEXT_MUTED};
 
 /// Preview strip dimensions. The width is also the scroll distance the dot
-/// covers per loop.
-const PREVIEW_W: f32 = 400.;
-const PREVIEW_H: f32 = 80.;
-const DOT_DIAMETER: f32 = 16.;
+/// covers per loop. Sized to fit beside the 420 px mouse model in the
+/// 1100 px window.
+const PREVIEW_W: f32 = 300.;
+const PREVIEW_H: f32 = 64.;
+const DOT_DIAMETER: f32 = 14.;
 
 /// px/sec per DPI count. Tuned so DPI 200 reads as obviously sluggish and DPI
 /// 6400 reads as obviously fast, without flying past so quickly the dot is
