@@ -219,38 +219,50 @@ mod macos {
     /// Read the frontmost application's bundle identifier via NSWorkspace.
     /// Pure FFI — returns `None` when no app is frontmost or the identifier
     /// is missing / non-UTF8.
+    ///
+    /// Wrapped in a per-call `NSAutoreleasePool`. Without it, every call on
+    /// a non-main thread (the watcher loop) leaks the workspace, app, and
+    /// bundle-id objects — at one call per second that's hundreds of MB
+    /// after a full workday.
     pub(crate) fn frontmost_bundle_id() -> Option<String> {
         use cocoa::base::{id, nil};
-        use cocoa::foundation::NSString;
+        use cocoa::foundation::{NSAutoreleasePool, NSString};
         use objc::{class, msg_send, sel, sel_impl};
 
         // SAFETY: NSWorkspace is part of AppKit, available on every supported
         // macOS (≥13.0). Each `msg_send!` returns either `nil` (handled below)
-        // or an autoreleased Objective-C object that outlives this synchronous
-        // function. NSString::UTF8String borrows the buffer for the lifetime
-        // of the surrounding autorelease pool — copying into an owned `String`
-        // before returning keeps the value valid for callers.
+        // or an autoreleased Objective-C object. The surrounding
+        // `NSAutoreleasePool` drains those temporaries when this function
+        // returns; the Rust `String` we hand back is a copy that outlives
+        // the pool.
         unsafe {
+            let pool = NSAutoreleasePool::new(nil);
             let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
             if workspace == nil {
+                let _: () = msg_send![pool, drain];
                 return None;
             }
             let app: id = msg_send![workspace, frontmostApplication];
             if app == nil {
+                let _: () = msg_send![pool, drain];
                 return None;
             }
             let bundle_id: id = msg_send![app, bundleIdentifier];
             if bundle_id == nil {
+                let _: () = msg_send![pool, drain];
                 return None;
             }
             let ptr: *const std::os::raw::c_char = NSString::UTF8String(bundle_id);
-            if ptr.is_null() {
-                return None;
-            }
-            std::ffi::CStr::from_ptr(ptr)
-                .to_str()
-                .ok()
-                .map(str::to_owned)
+            let result = if ptr.is_null() {
+                None
+            } else {
+                std::ffi::CStr::from_ptr(ptr)
+                    .to_str()
+                    .ok()
+                    .map(str::to_owned)
+            };
+            let _: () = msg_send![pool, drain];
+            result
         }
     }
 

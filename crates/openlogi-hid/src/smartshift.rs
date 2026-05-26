@@ -1,17 +1,19 @@
-//! HID++ `SmartShift` (feature `0x2111`) — wheel ratchet ↔ free-spin
-//! control.
+//! HID++ `SmartShift Enhanced` (feature `0x2111`) — wheel ratchet ↔
+//! free-spin control with sensitivity threshold.
 //!
-//! `hidpp 0.2` does not ship a typed wrapper. We re-implement just the
-//! two functions OpenLogi uses, mirroring the shape of
-//! [`crate::adjustable_dpi`].
+//! `hidpp 0.2` ships a typed wrapper for the original `0x2110 SmartShift`
+//! at function IDs `0` / `1`. The "Enhanced" variant `0x2111` (MX Master
+//! 3 / 3S / 4 and most current MX-line devices) shifts the call table by
+//! one slot — `0` is a capability query, `1` is the status read, `2` is
+//! the status write. Using `0x2110`'s function IDs against a `0x2111`
+//! device hits the wrong functions and the device silently keeps its
+//! previous state.
 //!
-//! HID++ 2.0 mode encoding (observed against MX Master 4 + verified
-//! against Solaar's `smartshift.py`):
-//!
+//! Mode encoding (consistent across 0x2110 / 0x2111):
 //! - `1` = free-spin (no ratchet, infinite scroll)
-//! - `2` = ratchet (clicky, smartshift off)
-//!
-//! Modes `0` and `3` are reserved or device-specific and not used here.
+//! - `2` = ratchet (clicky); when paired with sensitivity 1–50 the
+//!   firmware also engages auto-switch ("SmartShift active"); `0xff`
+//!   means "permanent ratchet, never auto-switch".
 
 use std::sync::Arc;
 
@@ -93,6 +95,14 @@ impl CreatableFeature for SmartShiftFeatureV0 {
 
 impl Feature for SmartShiftFeatureV0 {}
 
+/// `0x2111` function ID for `getStatus` — returns mode + current
+/// sensitivity + default sensitivity. Different from `0x2110` which uses
+/// function `0` for the same purpose.
+const FUNCTION_GET_STATUS: u8 = 1;
+/// `0x2111` function ID for `setStatus` — accepts mode + sensitivity +
+/// defaultSensitivity. `0x2110` uses function `1` here.
+const FUNCTION_SET_STATUS: u8 = 2;
+
 impl SmartShiftFeatureV0 {
     /// Read the current mode + sensitivity. Reserved mode bytes fall back
     /// to [`SmartShiftMode::Ratchet`] because that's the "safe" / clicky
@@ -104,7 +114,7 @@ impl SmartShiftFeatureV0 {
                 v20::MessageHeader {
                     device_index: self.device_index,
                     feature_index: self.feature_index,
-                    function_id: U4::from_lo(0),
+                    function_id: U4::from_lo(FUNCTION_GET_STATUS),
                     software_id: self.chan.get_sw_id(),
                 },
                 [0x00, 0x00, 0x00],
@@ -132,7 +142,7 @@ impl SmartShiftFeatureV0 {
                 v20::MessageHeader {
                     device_index: self.device_index,
                     feature_index: self.feature_index,
-                    function_id: U4::from_lo(1),
+                    function_id: U4::from_lo(FUNCTION_SET_STATUS),
                     software_id: self.chan.get_sw_id(),
                 },
                 [mode.as_byte(), sensitivity, 0],

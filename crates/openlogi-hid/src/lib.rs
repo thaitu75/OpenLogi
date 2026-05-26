@@ -15,4 +15,7 @@ pub mod write;
 
 pub use inventory::{InventoryError, enumerate};
 pub use smartshift::{SmartShiftMode, SmartShiftStatus};
-pub use write::{WriteError, set_dpi, toggle_smartshift};
+pub use write::{
+    FeatureEntry, WriteError, dump_features, get_dpi, get_smartshift_status, set_dpi,
+    toggle_smartshift,
+};

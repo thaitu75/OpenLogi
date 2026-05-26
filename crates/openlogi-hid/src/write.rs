@@ -47,20 +47,125 @@ pub enum WriteError {
 /// Re-enumerates each call — opening a HID++ channel is cheap enough
 /// at slider-release cadence, and avoids the complexity of holding a
 /// long-lived session over GPUI's runtime.
+/// Snapshot of one HID++ feature exposed by a device: protocol ID +
+/// version. Returned by [`dump_features`] for diagnostics.
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureEntry {
+    pub id: u16,
+    pub version: u8,
+}
+
+/// Enumerate every HID++ feature the device at `slot` reports — used by
+/// `openlogi diag features` to confirm which DPI / SmartShift / etc.
+/// feature IDs a given peripheral actually exposes (e.g. some mice use
+/// `0x2202 ExtendedAdjustableDpi` instead of `0x2201 AdjustableDpi`).
+pub async fn dump_features(
+    receiver_uid: Option<&str>,
+    slot: u8,
+) -> Result<Vec<FeatureEntry>, WriteError> {
+    use hidpp::feature::feature_set::v0::FeatureSetFeatureV0;
+    with_device(receiver_uid, slot, |channel| async move {
+        let mut device = Device::new(Arc::clone(&channel), slot)
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+        // The root feature exposes the FeatureSet (0x0001) at a fixed
+        // address; we look it up directly rather than going through
+        // `enumerate_features` so the iteration is observable.
+        let feature_set_info = device
+            .root()
+            .get_feature(FeatureSetFeatureV0::ID)
+            .await
+            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?
+            .ok_or(WriteError::FeatureUnsupported {
+                feature_hex: FeatureSetFeatureV0::ID,
+            })?;
+        let feature_set = device.add_feature::<FeatureSetFeatureV0>(feature_set_info.index);
+        let count = feature_set
+            .count()
+            .await
+            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
+        let mut entries = Vec::with_capacity(usize::from(count));
+        for i in 0..=count {
+            let info = feature_set
+                .get_feature(i)
+                .await
+                .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
+            entries.push(FeatureEntry {
+                id: info.id,
+                version: info.version,
+            });
+        }
+        Ok(entries)
+    })
+    .await
+}
+
+/// Look up `F` on a device by HID++ feature ID, register it with
+/// [`Device::add_feature`], and return the typed wrapper.
+///
+/// We bypass [`Device::enumerate_features`] because hidpp 0.2's central
+/// registry has `versions: &[]` for the features OpenLogi cares about
+/// (`0x2201 AdjustableDpi`, `0x2202 ExtendedAdjustableDpi`). Calling
+/// `enumerate_features` ends up _not_ registering them, so a subsequent
+/// `device.get_feature::<F>()` looking up our own TypeId returns `None`
+/// even when the device announces the feature ID. The direct lookup via
+/// `root().get_feature(id)` returns the assigned index unconditionally;
+/// `add_feature` then attaches our wrapper to that index.
+async fn open_feature<F: CreatableFeature + 'static>(
+    device: &mut Device,
+    _slot: u8,
+) -> Result<Arc<F>, WriteError> {
+    let info = device
+        .root()
+        .get_feature(F::ID)
+        .await
+        .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?
+        .ok_or(WriteError::FeatureUnsupported { feature_hex: F::ID })?;
+    Ok(device.add_feature::<F>(info.index))
+}
+
+/// Read the device's current DPI on sensor 0 — companion to [`set_dpi`].
+/// Used by `openlogi diag dpi` and any future Settings → Diagnostics
+/// surface that wants to display the current value without writing.
+pub async fn get_dpi(receiver_uid: Option<&str>, slot: u8) -> Result<u16, WriteError> {
+    with_device(receiver_uid, slot, |channel| async move {
+        let mut device = Device::new(Arc::clone(&channel), slot)
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+        let feature = open_feature::<AdjustableDpiFeatureV0>(&mut device, slot).await?;
+        feature
+            .get_sensor_dpi(0)
+            .await
+            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))
+    })
+    .await
+}
+
+/// Read the device's current SmartShift mode + sensitivity — companion to
+/// [`toggle_smartshift`].
+pub async fn get_smartshift_status(
+    receiver_uid: Option<&str>,
+    slot: u8,
+) -> Result<SmartShiftStatus, WriteError> {
+    with_device(receiver_uid, slot, |channel| async move {
+        let mut device = Device::new(Arc::clone(&channel), slot)
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+        let feature = open_feature::<SmartShiftFeatureV0>(&mut device, slot).await?;
+        feature
+            .get_status()
+            .await
+            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))
+    })
+    .await
+}
+
 pub async fn set_dpi(receiver_uid: Option<&str>, slot: u8, dpi: u16) -> Result<(), WriteError> {
     with_device(receiver_uid, slot, |channel| async move {
         let mut device = Device::new(Arc::clone(&channel), slot)
             .await
             .map_err(|_| WriteError::DeviceUnreachable { slot })?;
-        device
-            .enumerate_features()
-            .await
-            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
-        let feature = device.get_feature::<AdjustableDpiFeatureV0>().ok_or(
-            WriteError::FeatureUnsupported {
-                feature_hex: AdjustableDpiFeatureV0::ID,
-            },
-        )?;
+        let feature = open_feature::<AdjustableDpiFeatureV0>(&mut device, slot).await?;
         feature
             .set_sensor_dpi(0, dpi)
             .await
@@ -105,16 +210,7 @@ pub async fn toggle_smartshift(
         let mut device = Device::new(Arc::clone(&channel), slot)
             .await
             .map_err(|_| WriteError::DeviceUnreachable { slot })?;
-        device
-            .enumerate_features()
-            .await
-            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
-        let feature =
-            device
-                .get_feature::<SmartShiftFeatureV0>()
-                .ok_or(WriteError::FeatureUnsupported {
-                    feature_hex: SmartShiftFeatureV0::ID,
-                })?;
+        let feature = open_feature::<SmartShiftFeatureV0>(&mut device, slot).await?;
         let SmartShiftStatus { mode, sensitivity } = feature
             .get_status()
             .await
