@@ -11,12 +11,14 @@ use futures_lite::StreamExt as _;
 use hidpp::{
     channel::HidppChannel,
     device::Device,
+    feature::CreatableFeature,
     receiver::{self, Receiver},
 };
 use thiserror::Error;
 use tracing::debug;
 
 use crate::adjustable_dpi::AdjustableDpiFeatureV0;
+use crate::smartshift::{SmartShiftFeatureV0, SmartShiftMode, SmartShiftStatus};
 use crate::transport::AsyncHidChannel;
 
 /// Logitech HID vendor ID — kept in sync with [`crate::inventory`].
@@ -32,8 +34,8 @@ pub enum WriteError {
     ReceiverNotFound,
     #[error("device on slot {slot} did not respond to HID++")]
     DeviceUnreachable { slot: u8 },
-    #[error("device does not expose HID++ feature 0x2201 (AdjustableDpi)")]
-    FeatureUnsupported,
+    #[error("device does not expose HID++ feature {feature_hex:#06x}")]
+    FeatureUnsupported { feature_hex: u16 },
     #[error("HID++ protocol error: {0}")]
     Hidpp(String),
 }
@@ -46,6 +48,79 @@ pub enum WriteError {
 /// at slider-release cadence, and avoids the complexity of holding a
 /// long-lived session over GPUI's runtime.
 pub async fn set_dpi(receiver_uid: Option<&str>, slot: u8, dpi: u16) -> Result<(), WriteError> {
+    with_device(receiver_uid, slot, |channel| async move {
+        let mut device = Device::new(Arc::clone(&channel), slot)
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+        device
+            .enumerate_features()
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+        let feature = device.get_feature::<AdjustableDpiFeatureV0>().ok_or(
+            WriteError::FeatureUnsupported {
+                feature_hex: AdjustableDpiFeatureV0::ID,
+            },
+        )?;
+        feature
+            .set_sensor_dpi(0, dpi)
+            .await
+            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
+        debug!(slot, dpi, "wrote DPI");
+        Ok(())
+    })
+    .await
+}
+
+/// Toggle SmartShift mode (free ↔ ratchet) on `slot`. Reads the current
+/// mode first, then writes the opposite — keeps current sensitivity.
+/// Returns the new mode written.
+///
+/// `FeatureUnsupported` when the device doesn't expose HID++ `0x2111`
+/// (older Logi mice and most non-MX devices).
+pub async fn toggle_smartshift(
+    receiver_uid: Option<&str>,
+    slot: u8,
+) -> Result<SmartShiftMode, WriteError> {
+    with_device(receiver_uid, slot, |channel| async move {
+        let mut device = Device::new(Arc::clone(&channel), slot)
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+        device
+            .enumerate_features()
+            .await
+            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+        let feature =
+            device
+                .get_feature::<SmartShiftFeatureV0>()
+                .ok_or(WriteError::FeatureUnsupported {
+                    feature_hex: SmartShiftFeatureV0::ID,
+                })?;
+        let SmartShiftStatus { mode, sensitivity } = feature
+            .get_status()
+            .await
+            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
+        let next = mode.flipped();
+        feature
+            .set_status(next, sensitivity)
+            .await
+            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
+        debug!(slot, ?next, "wrote SmartShift mode");
+        Ok(next)
+    })
+    .await
+}
+
+/// Boilerplate-eater: enumerate HID candidates, find a matching Bolt
+/// receiver, run `f` once with the opened HID++ channel.
+async fn with_device<F, Fut, T>(
+    receiver_uid: Option<&str>,
+    _slot: u8,
+    f: F,
+) -> Result<T, WriteError>
+where
+    F: FnOnce(Arc<HidppChannel>) -> Fut,
+    Fut: std::future::Future<Output = Result<T, WriteError>>,
+{
     let backend = HidBackend::default();
     let candidates: Vec<async_hid::Device> = backend
         .enumerate()
@@ -80,28 +155,8 @@ pub async fn set_dpi(receiver_uid: Option<&str>, slot: u8, dpi: u16) -> Result<(
             }
         }
 
-        return push_dpi(&channel, slot, dpi).await;
+        return f(channel).await;
     }
 
     Err(WriteError::ReceiverNotFound)
-}
-
-async fn push_dpi(channel: &Arc<HidppChannel>, slot: u8, dpi: u16) -> Result<(), WriteError> {
-    let mut device = Device::new(Arc::clone(channel), slot)
-        .await
-        .map_err(|_| WriteError::DeviceUnreachable { slot })?;
-    device
-        .enumerate_features()
-        .await
-        .map_err(|_| WriteError::DeviceUnreachable { slot })?;
-
-    let feature = device
-        .get_feature::<AdjustableDpiFeatureV0>()
-        .ok_or(WriteError::FeatureUnsupported)?;
-    feature
-        .set_sensor_dpi(0, dpi)
-        .await
-        .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
-    debug!(slot, dpi, "wrote DPI");
-    Ok(())
 }

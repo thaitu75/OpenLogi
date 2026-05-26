@@ -10,7 +10,9 @@ mod transport;
 
 pub mod adjustable_dpi;
 pub mod inventory;
+pub mod smartshift;
 pub mod write;
 
 pub use inventory::{InventoryError, enumerate};
-pub use write::{WriteError, set_dpi};
+pub use smartshift::{SmartShiftMode, SmartShiftStatus};
+pub use write::{WriteError, set_dpi, toggle_smartshift};

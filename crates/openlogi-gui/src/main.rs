@@ -37,7 +37,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use crate::app::AppView;
-use crate::hardware::write_dpi_in_background;
+use crate::hardware::{toggle_smartshift_in_background, write_dpi_in_background};
 use crate::state::{AppState, DpiCycleState};
 
 fn main() -> Result<()> {
@@ -331,6 +331,15 @@ fn dispatch_action(action: &Action, dpi_cycle: &Arc<RwLock<DpiCycleState>>) {
                 None
             }
         },
+        Action::ToggleSmartShift => {
+            // P1.1: SmartShift uses the same device target as DPI. Read
+            // the target from the shared cycle state instead of duplicating
+            // a SmartShiftState mirror.
+            let target = dpi_cycle.read().ok().and_then(|g| g.target.clone());
+            info!("SmartShift toggle → flipping wheel mode");
+            toggle_smartshift_in_background(target);
+            return;
+        }
         other => {
             other.execute();
             None
