@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 openlogi-core = { path = "../openlogi-core" }
 openlogi-hid = { path = "../openlogi-hid" }
+openlogi-hook = { path = "../openlogi-hook" }
 # Shared asset schema + HTTP fetch + sha verification. Re-exports ureq /
 # sha2 transitively so we don't list them again.
 openlogi-assets = { path = "../openlogi-assets" }

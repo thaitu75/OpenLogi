@@ -15,6 +15,7 @@
 )]
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 
 use gpui::Global;
 use openlogi_core::config::Config;
@@ -60,17 +61,41 @@ pub struct AppState {
     /// [`Self::set_current_device`] so restarts preserve user bindings and
     /// the last-selected device.
     config: Config,
+    /// Shared binding map consumed by the OS-level hook thread (P0.1). The
+    /// hook holds the other `Arc` clone; writes here are picked up by the next
+    /// hook callback without GPUI thread involvement.
+    pub hook_bindings: Arc<RwLock<BTreeMap<ButtonId, Action>>>,
 }
 
 impl AppState {
-    /// Build the global from a loaded config + enumerated inventories. The
-    /// initial selection prefers [`Config::selected_device`] if it still
+    /// Build the global from a loaded config + enumerated inventories.
+    ///
+    /// The initial selection prefers [`Config::selected_device`] if it still
     /// matches one of the paired devices; otherwise it falls back to index 0.
+    ///
+    /// A fresh `Arc<RwLock<…>>` is created for [`Self::hook_bindings`]. When
+    /// the OS event hook (P0.1) needs to share the same map, the caller
+    /// builds the `Arc` first and uses [`Self::with_runtime_shared`] instead.
     #[must_use]
     pub fn with_runtime(
         config: Config,
         inventories: &[DeviceInventory],
         cache: &AssetCache,
+    ) -> Self {
+        let arc = Arc::new(RwLock::new(BTreeMap::new()));
+        Self::with_runtime_shared(config, inventories, cache, arc)
+    }
+
+    /// Like [`Self::with_runtime`] but re-uses an existing `Arc` so the
+    /// hook thread and `AppState` share the same binding map. The `Arc` is
+    /// rewritten to match the resolved initial bindings so the hook sees
+    /// the correct state from the very first captured event.
+    #[must_use]
+    pub fn with_runtime_shared(
+        config: Config,
+        inventories: &[DeviceInventory],
+        cache: &AssetCache,
+        hook_bindings: Arc<RwLock<BTreeMap<ButtonId, Action>>>,
     ) -> Self {
         let device_list = build_device_list(inventories, cache);
         let current_device = pick_initial_device(&device_list, config.selected_device());
@@ -81,8 +106,10 @@ impl AppState {
             dpi: DEFAULT_DPI,
             device_list,
             config,
+            hook_bindings,
         };
         state.button_bindings = state.bindings_for_current();
+        state.sync_hook_bindings();
         state
     }
 
@@ -96,13 +123,15 @@ impl AppState {
     /// Switch the carousel to `idx`. Out-of-range indices are silently
     /// ignored so callers can pass them straight through from UI events.
     /// Persists the new selection (by config key, not index — index isn't
-    /// stable across restarts) and reloads bindings for the new device.
+    /// stable across restarts), reloads bindings for the new device, and
+    /// pushes the new map into the hook-shared `Arc`.
     pub fn set_current_device(&mut self, idx: usize) {
         if idx >= self.device_list.len() || idx == self.current_device {
             return;
         }
         self.current_device = idx;
         self.button_bindings = self.bindings_for_current();
+        self.sync_hook_bindings();
         let key = self.current_record().map(|r| r.config_key.clone());
         self.config.set_selected_device(key);
         if let Err(e) = self.config.save_atomic() {
@@ -110,15 +139,30 @@ impl AppState {
         }
     }
 
-    /// Update a single binding both in memory and on disk for the currently
-    /// selected device.
+    /// Update a single binding in memory, on disk, and in the shared hook
+    /// map for the currently selected device.
     ///
-    /// Disk failures are logged at `warn` instead of bubbling up: the UI
-    /// thread shouldn't crash because the user's home volume is full. A
-    /// future retry / banner UI can read the most recent error from
-    /// [`tracing`].
+    /// Disk failures and poisoned hook locks are logged at `warn` instead
+    /// of bubbling up: the UI thread shouldn't crash because the user's
+    /// home volume is full or because the hook thread panicked.
     pub fn commit_binding(&mut self, button: ButtonId, action: Action) {
         self.button_bindings.insert(button, action.clone());
+
+        // Push into the hook-shared map. A poisoned lock means the hook
+        // thread panicked; log and carry on rather than propagating to the
+        // UI.
+        match self.hook_bindings.write() {
+            Ok(mut guard) => {
+                guard.insert(button, action.clone());
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "hook_bindings lock poisoned — binding change will not reach the hook"
+                );
+            }
+        }
+
         let Some(key) = self.current_record().map(|r| r.config_key.clone()) else {
             debug!(
                 ?button,
@@ -146,6 +190,23 @@ impl AppState {
             bindings.insert(k, v);
         }
         bindings
+    }
+
+    /// Mirror [`Self::button_bindings`] into the hook-shared `Arc`. Called
+    /// after the UI-side map changes wholesale (initial build, device
+    /// switch) so the hook thread observes consistent state.
+    fn sync_hook_bindings(&self) {
+        match self.hook_bindings.write() {
+            Ok(mut guard) => {
+                *guard = self.button_bindings.clone();
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "hook_bindings lock poisoned — hook will keep stale bindings"
+                );
+            }
+        }
     }
 }
 

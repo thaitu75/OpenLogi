@@ -6,6 +6,7 @@ members = [
     "crates/openlogi-assets",
     "crates/openlogi-cli",
     "crates/openlogi-gui",
+    "crates/openlogi-hook",
 ]
 
 [workspace.package]
@@ -36,6 +37,9 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 directories = "5"
+# macOS event-tap and accessibility APIs (only compiled on macOS targets).
+core-graphics = { version = "0.25", default-features = false, features = ["link"] }
+core-foundation = { version = "0.10", default-features = false, features = ["link"] }
 
 # GPUI stack. The longbridge gpui-component README points at Zed's git HEAD
 # because their crates.io publishes (gpui 0.2.x, gpui-component 0.5.x) lag the

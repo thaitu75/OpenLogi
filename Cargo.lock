@@ -4283,6 +4283,7 @@ dependencies = [
  "openlogi-assets",
  "openlogi-core",
  "openlogi-hid",
+ "openlogi-hook",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4298,6 +4299,17 @@ dependencies = [
  "openlogi-core",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "openlogi-hook"
+version = "0.0.1"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-graphics 0.25.0",
+ "openlogi-core",
+ "thiserror 2.0.18",
  "tracing",
 ]
 

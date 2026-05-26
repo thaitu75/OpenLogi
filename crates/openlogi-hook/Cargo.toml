@@ -1,0 +1,32 @@
+[package]
+name = "openlogi-hook"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OS-level mouse-event hook for OpenLogi. macOS via CGEventTap; Linux/Windows are stubs."
+
+[dependencies]
+openlogi-core = { path = "../openlogi-core" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { workspace = true }
+core-foundation = { workspace = true }
+
+# Cannot inherit workspace lints while overriding unsafe_code, so we reproduce
+# the workspace lint set here and change only unsafe_code to "allow". The crate
+# uses a narrow unsafe surface (CGEventTap internals + AX FFI) documented with
+# SAFETY comments.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+missing_errors_doc = "allow"
+doc_markdown = "allow"
