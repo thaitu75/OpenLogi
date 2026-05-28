@@ -254,7 +254,11 @@ fn asset_hotspots_for_png(asset: &ResolvedAsset, mouse_w: f32, mouse_h: f32) -> 
         .origin()
         .map_or(png_w, |o| o.width as f32)
         .min(png_w);
-    let bbox_w_rendered = if png_w > 0. { mouse_w * origin_w / png_w } else { mouse_w };
+    let bbox_w_rendered = if png_w > 0. {
+        mouse_w * origin_w / png_w
+    } else {
+        mouse_w
+    };
     let bbox_x_offset = (mouse_w - bbox_w_rendered) / 2.;
     let marker_to_canvas = |mx: f32, my: f32| -> (f32, f32) {
         let cx = bbox_x_offset + mx / 100. * bbox_w_rendered;

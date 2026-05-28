@@ -22,11 +22,19 @@ use super::AssetCache;
 /// so dev / staging deployments can point elsewhere without a rebuild.
 pub const DEFAULT_BASE: &str = "https://assets.openlogi.org";
 
-/// Baseline files always fetched per depot. `AssetCache` opens
-/// `front_core.png` + `core_metadata.json`; `manifest.json` drives the
-/// HID++ `extended_model_id` → colour variant lookup. The variant PNG
-/// itself is fetched in a second pass after the manifest is on disk.
-const FETCH_FILES: &[&str] = &["core_metadata.json", "manifest.json", "front_core.png"];
+/// Baseline files always fetched per depot. `AssetCache` reads
+/// `core_metadata.json` for hotspot layout, `manifest.json` for the
+/// `extended_model_id` → colour-variant lookup, `front_core.png` for the
+/// carousel render, and `side_core.png` for the buttons-config view —
+/// Logi calibrates the assignment markers against the side image, so
+/// hotspots only line up with real buttons when that one is local.
+/// Variant PNGs are picked up in a second pass after the manifest lands.
+const FETCH_FILES: &[&str] = &[
+    "core_metadata.json",
+    "manifest.json",
+    "front_core.png",
+    "side_core.png",
+];
 
 /// Whether the startup HTTP sync should run on this launch.
 ///
@@ -110,12 +118,21 @@ fn sync_depot(
         fetch_to_cache(server, &entry.asset_path, &dir, entry, name)?;
     }
 
-    // Optional second pass: download the colour variant PNG matching the
-    // connected device's `extended_model_id`. Failure is non-fatal —
-    // `AssetCache.load_files` falls back to `front_core.png`.
-    if let Some(variant) = pick_variant_filename(&dir.join("manifest.json"), &entry.model_id, ext)
-        && variant != "front_core.png"
-    {
+    // Optional second pass: download the colour variant PNGs matching
+    // the connected device's `extended_model_id`, for both the front
+    // (carousel) and the side / buttons (mouse-model) views. Failure is
+    // non-fatal — `AssetCache.load_files` falls back to the bare core
+    // PNG that came in with `FETCH_FILES`.
+    let manifest_path = dir.join("manifest.json");
+    for resource_key in ["device_image", "device_buttons_image"] {
+        let Some(variant) =
+            pick_variant_filename(&manifest_path, &entry.model_id, ext, resource_key)
+        else {
+            continue;
+        };
+        if variant == "front_core.png" || variant == "side_core.png" {
+            continue;
+        }
         if let Err(e) = fetch_to_cache(server, &entry.asset_path, &dir, entry, &variant) {
             warn!(depot, variant = %variant, error = %e, "variant fetch failed");
         }
@@ -152,9 +169,15 @@ fn fetch_to_cache(
 }
 
 /// Parse a freshly-downloaded `manifest.json` and resolve the colour
-/// variant filename. `None` when the manifest is missing, malformed,
-/// or doesn't list the device's `ext` byte.
-fn pick_variant_filename(manifest_path: &Path, base_model_id: &str, ext: u8) -> Option<String> {
+/// variant filename for `resource_key` (e.g. `"device_image"` or
+/// `"device_buttons_image"`). `None` when the manifest is missing,
+/// malformed, or doesn't list the device's `ext` byte.
+fn pick_variant_filename(
+    manifest_path: &Path,
+    base_model_id: &str,
+    ext: u8,
+    resource_key: &str,
+) -> Option<String> {
     if ext == 0 || !manifest_path.exists() {
         return None;
     }
@@ -162,5 +185,7 @@ fn pick_variant_filename(manifest_path: &Path, base_model_id: &str, ext: u8) -> 
         .map_err(|e| warn!(error = %e, path = %manifest_path.display(), "manifest unreadable"))
         .ok()?;
     let variant = variant_model_id(base_model_id, ext);
-    manifest.device_image_for(&variant).map(str::to_string)
+    manifest
+        .resource_for(&variant, resource_key)
+        .map(str::to_string)
 }

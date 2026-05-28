@@ -109,15 +109,36 @@ impl AssetCache {
             }
 
             // Pick the colour variant matching this device's HID++
-            // extended_model_id byte. Falls back to `front_core.png`
-            // when the depot has no manifest, the manifest doesn't list
-            // the variant, or the variant PNG isn't cached.
-            let image_name = variant_image_for(&dir, &entry.model_id, model.extended_model_id)
-                .unwrap_or_else(|| "front_core.png".to_string());
-            let image_path = dir.join(&image_name);
-            if !image_path.exists() {
+            // extended_model_id byte. Logi calibrates the assignment
+            // markers against the *buttons* image (typically
+            // `side_*.png`), so we prefer that resource for the
+            // mouse-model render — otherwise hotspot percentages drift
+            // off every button. `front_*.png` is left for the carousel.
+            let buttons_name = buttons_image_for(&dir, &entry.model_id, model.extended_model_id);
+            let variant_front_name =
+                variant_image_for(&dir, &entry.model_id, model.extended_model_id);
+            let image_name = buttons_name
+                .clone()
+                .or_else(|| variant_front_name.clone())
+                .unwrap_or_else(|| "side_core.png".to_string());
+            // The chosen file may not have been synced (older bundles
+            // shipped front-only); fall back through alternatives so a
+            // stale cache still gets *something* rather than a synthetic
+            // silhouette.
+            let candidates = [
+                image_name.clone(),
+                "side_core.png".to_string(),
+                variant_front_name.unwrap_or_default(),
+                "front_core.png".to_string(),
+            ];
+            let Some(image_path) = candidates
+                .iter()
+                .filter(|n| !n.is_empty())
+                .map(|n| dir.join(n))
+                .find(|p| p.exists())
+            else {
                 continue;
-            }
+            };
 
             let metadata = match Metadata::load_from(&meta_path) {
                 Ok(m) => m,
@@ -201,21 +222,40 @@ fn read_png_dimensions(path: &Path) -> std::io::Result<(u32, u32)> {
 /// variant matching `ext`. Returns the `device_image` src filename or
 /// `None` when the manifest is missing / malformed / lacks the variant.
 fn variant_image_for(dir: &Path, base_model_id: &str, ext: u8) -> Option<String> {
-    if ext == 0 {
-        return None;
-    }
+    let manifest = load_manifest(dir)?;
+    let model_id = if ext == 0 {
+        base_model_id.to_string()
+    } else {
+        variant_model_id(base_model_id, ext)
+    };
+    manifest.device_image_for(&model_id).map(str::to_string)
+}
+
+/// Like [`variant_image_for`] but returns the `device_buttons_image`
+/// resource (typically `side_*.png`) — that's the view Logi calibrates
+/// the assignment markers against, so the mouse-model render uses it.
+fn buttons_image_for(dir: &Path, base_model_id: &str, ext: u8) -> Option<String> {
+    let manifest = load_manifest(dir)?;
+    let model_id = if ext == 0 {
+        base_model_id.to_string()
+    } else {
+        variant_model_id(base_model_id, ext)
+    };
+    manifest
+        .resource_for(&model_id, "device_buttons_image")
+        .map(str::to_string)
+}
+
+fn load_manifest(dir: &Path) -> Option<DepotManifest> {
     let manifest_path = dir.join("manifest.json");
     if !manifest_path.exists() {
         return None;
     }
-    let manifest = DepotManifest::load_from(&manifest_path)
+    DepotManifest::load_from(&manifest_path)
         .map_err(
             |e| warn!(error = ?e, path = %manifest_path.display(), "depot manifest unreadable"),
         )
-        .ok()?;
-    let variant = variant_model_id(base_model_id, ext);
-    let src = manifest.device_image_for(&variant)?;
-    Some(src.to_string())
+        .ok()
 }
 
 impl Default for AssetCache {

@@ -77,10 +77,18 @@ impl DepotManifest {
     /// know that variant — callers fall back to `front_core.png`.
     #[must_use]
     pub fn device_image_for(&self, model_id: &str) -> Option<&str> {
+        self.resource_for(model_id, "device_image")
+    }
+
+    /// Returns the `src` filename of the manifest resource whose `key`
+    /// equals `resource_key` (e.g. `"device_buttons_image"`) for the
+    /// variant matching `model_id`. Case-insensitive on the model id.
+    #[must_use]
+    pub fn resource_for(&self, model_id: &str, resource_key: &str) -> Option<&str> {
         self.devices
             .iter()
             .find(|d| d.model_id.eq_ignore_ascii_case(model_id))
-            .and_then(|d| d.resources.iter().find(|r| r.key == "device_image"))
+            .and_then(|d| d.resources.iter().find(|r| r.key == resource_key))
             .map(|r| r.src.as_str())
     }
 }

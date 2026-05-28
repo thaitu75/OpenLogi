@@ -17,21 +17,33 @@ use openlogi_assets::http;
 /// Default origin. Overridable via `--base` / `OPENLOGI_ASSETS`.
 const DEFAULT_BASE: &str = "https://assets.openlogi.org";
 
-/// Required per-depot files. `AssetCache` always reads
-/// `core_metadata.json` for hotspot layout; `manifest.json` drives the
-/// HID++ `extended_model_id` → colour variant lookup; `front_core.png`
-/// is the fallback render when the device's variant isn't cached.
-const REQUIRED_FILES: &[&str] = &["core_metadata.json", "manifest.json", "front_core.png"];
+/// Required per-depot files.
+/// - `core_metadata.json` carries the hotspot percentages
+/// - `manifest.json` maps HID++ `extended_model_id` → colour variant
+/// - `front_core.png` is the carousel / branding render
+/// - `side_core.png` is the *buttons* render — Logi calibrates marker
+///   percentages against this one, so the mouse-model view must show it
+///   to keep hotspots over the actual buttons.
+const REQUIRED_FILES: &[&str] = &[
+    "core_metadata.json",
+    "manifest.json",
+    "front_core.png",
+    "side_core.png",
+];
 
-/// Returns true when `name` is a front-view colour variant PNG
-/// (`front_ext_1.png`, `front_ext_2.png`, …). The depot also ships
-/// `side_*` and `back_*` renders — those stay remote until a future
-/// scroll / easyswitch view needs them.
-fn is_variant_front(name: &str) -> bool {
-    name.starts_with("front_ext_")
-        && std::path::Path::new(name)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+/// Returns true when `name` is a colour variant PNG OpenLogi needs
+/// locally: `front_ext_N.png` for the carousel, `side_ext_N.png` for
+/// the buttons-config view. The depot also ships `back_*` renders —
+/// those stay remote until a future easyswitch view needs them.
+fn is_required_variant(name: &str) -> bool {
+    let path = std::path::Path::new(name);
+    let ext_is_png = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"));
+    if !ext_is_png {
+        return false;
+    }
+    name.starts_with("front_ext_") || name.starts_with("side_ext_")
 }
 
 #[derive(Debug, Args)]
@@ -84,7 +96,7 @@ pub fn run(args: SyncArgs) -> Result<()> {
         let wanted: Vec<&openlogi_assets::FileEntry> = entry
             .files
             .iter()
-            .filter(|f| REQUIRED_FILES.contains(&f.name.as_str()) || is_variant_front(&f.name))
+            .filter(|f| REQUIRED_FILES.contains(&f.name.as_str()) || is_required_variant(&f.name))
             .collect();
         for required in REQUIRED_FILES {
             if !wanted.iter().any(|f| f.name == *required) {
@@ -108,7 +120,7 @@ pub fn run(args: SyncArgs) -> Result<()> {
         .devices
         .values()
         .flat_map(|d| d.files.iter())
-        .filter(|f| REQUIRED_FILES.contains(&f.name.as_str()) || is_variant_front(&f.name))
+        .filter(|f| REQUIRED_FILES.contains(&f.name.as_str()) || is_required_variant(&f.name))
         .map(|f| f.bytes)
         .sum();
     #[allow(
