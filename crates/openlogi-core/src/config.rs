@@ -212,10 +212,7 @@ impl Config {
     /// Returns the gesture sub-bindings stored for `device_key`, or an empty
     /// map if none are set yet.
     #[must_use]
-    pub fn gesture_bindings_for(
-        &self,
-        device_key: &str,
-    ) -> BTreeMap<GestureDirection, Action> {
+    pub fn gesture_bindings_for(&self, device_key: &str) -> BTreeMap<GestureDirection, Action> {
         self.devices
             .get(device_key)
             .map(|d| d.gesture_bindings.clone())

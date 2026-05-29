@@ -385,8 +385,11 @@ fn default_labels() -> Vec<Label> {
 /// host a Popover whose trigger is the label card itself. Same picker
 /// content as the hotspot dot — clicking either entry point lands on the
 /// same binding flow.
-#[allow(clippy::too_many_arguments, reason = "wrapper position + trigger \
-state both need this many inputs; bundling would just hide the dependency")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "wrapper position + trigger \
+state both need this many inputs; bundling would just hide the dependency"
+)]
 fn label_popover(
     idx: usize,
     label: Label,
