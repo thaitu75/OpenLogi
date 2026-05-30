@@ -7,7 +7,7 @@
 //!   with the OS appearance (the OpenLogi accent blue, the connectivity dots).
 //! - **Surface / text** colours flip with the appearance and live in
 //!   [`Palette`], chosen by [`palette`] from the active gpui-component theme
-//!   mode. The bespoke surfaces (window, cards, mouse model, gesture pad)
+//!   mode. The bespoke surfaces (window, cards, mouse model)
 //!   read these so they track the same light/dark switch as gpui-component's
 //!   own widgets — which is what keeps a popover from rendering white under
 //!   an otherwise dark UI (see `main.rs`'s appearance wiring).

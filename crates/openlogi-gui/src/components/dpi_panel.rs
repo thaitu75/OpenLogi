@@ -30,7 +30,7 @@ use crate::theme::{self, ACCENT_BLUE, Palette};
 /// `receiver_uid` is the Bolt receiver's unique id (so we route writes
 /// correctly when more than one receiver is plugged in); `slot` is the
 /// device's pairing slot on that receiver.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DpiTarget {
     pub receiver_uid: String,
     pub slot: u8,

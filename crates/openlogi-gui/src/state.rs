@@ -2,7 +2,7 @@
 //!
 //! Anything that more than one view needs to read (current device, currently
 //! armed button, the DPI value the panel and the dot-preview share) lives
-//! here. Per-component scratch state (hover index, gesture point buffer) stays
+//! here. Per-component scratch state (hover index) stays
 //! in the owning entity.
 //!
 //! [`AppState::with_runtime`] resolves every paired device's asset + DPI
@@ -125,6 +125,11 @@ pub struct AppState {
     /// Shared DPI-cycle state consumed by the hook thread when dispatching
     /// [`Action::CycleDpiPresets`] / [`Action::SetDpiPreset`].
     pub dpi_cycle: Arc<RwLock<DpiCycleState>>,
+    /// Shared gesture-direction binding map consumed by the gesture watcher
+    /// thread. Mirrors [`Self::hook_bindings`] but keyed by direction; the
+    /// watcher holds the other `Arc` clone, so writes here reach it without
+    /// GPUI involvement.
+    pub gesture_hook_bindings: Arc<RwLock<BTreeMap<GestureDirection, Action>>>,
 }
 
 impl AppState {
@@ -143,8 +148,16 @@ impl AppState {
         cache: &AssetResolver,
     ) -> Self {
         let bindings_arc = Arc::new(RwLock::new(BTreeMap::new()));
+        let gesture_arc = Arc::new(RwLock::new(BTreeMap::new()));
         let cycle_arc = Arc::new(RwLock::new(DpiCycleState::default()));
-        Self::with_runtime_shared(config, inventories, cache, bindings_arc, cycle_arc)
+        Self::with_runtime_shared(
+            config,
+            inventories,
+            cache,
+            bindings_arc,
+            gesture_arc,
+            cycle_arc,
+        )
     }
 
     /// Like [`Self::with_runtime`] but re-uses existing `Arc`s so the hook
@@ -157,6 +170,7 @@ impl AppState {
         inventories: &[DeviceInventory],
         cache: &AssetResolver,
         hook_bindings: Arc<RwLock<BTreeMap<ButtonId, Action>>>,
+        gesture_hook_bindings: Arc<RwLock<BTreeMap<GestureDirection, Action>>>,
         dpi_cycle: Arc<RwLock<DpiCycleState>>,
     ) -> Self {
         let device_list = build_device_list(inventories, cache);
@@ -174,33 +188,41 @@ impl AppState {
             config,
             hook_bindings,
             dpi_cycle,
+            gesture_hook_bindings,
         };
         state.button_bindings = state.bindings_for_current();
         state.gesture_bindings = state.gesture_bindings_for_current();
         state.sync_hook_bindings();
+        state.sync_gesture_bindings();
         state.sync_dpi_cycle();
         state
     }
 
-    /// Build the binding and DPI snapshots consumed by the OS hook before
-    /// the GPUI global exists. Uses the same device-selection and binding
-    /// overlay rules as [`Self::with_runtime_shared`].
+    /// Build the button-binding, gesture-binding, and DPI snapshots consumed by
+    /// the OS hook and gesture watcher before the GPUI global exists. Uses the
+    /// same device-selection and binding rules as [`Self::with_runtime_shared`].
     #[must_use]
     pub fn initial_hook_state(
         config: &Config,
         inventories: &[DeviceInventory],
         cache: &AssetResolver,
-    ) -> (BTreeMap<ButtonId, Action>, DpiCycleState) {
+    ) -> (
+        BTreeMap<ButtonId, Action>,
+        BTreeMap<GestureDirection, Action>,
+        DpiCycleState,
+    ) {
         let device_list = build_device_list(inventories, cache);
         let current_device = pick_initial_device(&device_list, config.selected_device());
         let record = device_list.get(current_device);
         let bindings = bindings_for(config, record, None);
+        let gesture_bindings = gesture_bindings_for(config, record);
         let presets = record
             .map(|r| config.dpi_presets(&r.config_key))
             .unwrap_or_default();
         let target = record.and_then(|r| r.dpi_target.clone());
         (
             bindings,
+            gesture_bindings,
             DpiCycleState {
                 presets,
                 index: 0,
@@ -271,6 +293,7 @@ impl AppState {
         self.button_bindings = self.bindings_for_current();
         self.gesture_bindings = self.gesture_bindings_for_current();
         self.sync_hook_bindings();
+        self.sync_gesture_bindings();
         self.sync_dpi_cycle();
     }
 
@@ -287,6 +310,7 @@ impl AppState {
         self.button_bindings = self.bindings_for_current();
         self.gesture_bindings = self.gesture_bindings_for_current();
         self.sync_hook_bindings();
+        self.sync_gesture_bindings();
         self.sync_dpi_cycle();
         let key = self.current_record().map(|r| r.config_key.clone());
         self.config.set_selected_device(key);
@@ -409,11 +433,22 @@ impl AppState {
         gesture_bindings_for(&self.config, self.current_record())
     }
 
-    /// Update a single gesture-button sub-binding in memory + on disk for the
-    /// currently selected device. The hook layer doesn't yet read the
-    /// gesture map (P1.5), so this is config-only — no shared `Arc` push.
+    /// Update a single gesture-button sub-binding in memory, on disk, and in the
+    /// shared gesture map the watcher thread reads.
     pub fn commit_gesture_binding(&mut self, direction: GestureDirection, action: Action) {
         self.gesture_bindings.insert(direction, action.clone());
+
+        match self.gesture_hook_bindings.write() {
+            Ok(mut guard) => {
+                guard.insert(direction, action.clone());
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "gesture_hook_bindings lock poisoned — change will not reach the watcher"
+                );
+            }
+        }
 
         let Some(key) = self.current_record().map(|r| r.config_key.clone()) else {
             debug!(
@@ -440,6 +475,23 @@ impl AppState {
                 warn!(
                     error = %e,
                     "hook_bindings lock poisoned — hook will keep stale bindings"
+                );
+            }
+        }
+    }
+
+    /// Mirror [`Self::gesture_bindings`] into the watcher-shared `Arc`. Called
+    /// alongside [`Self::sync_hook_bindings`] after the gesture map changes
+    /// wholesale (initial build, device switch).
+    fn sync_gesture_bindings(&self) {
+        match self.gesture_hook_bindings.write() {
+            Ok(mut guard) => {
+                *guard = self.gesture_bindings.clone();
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "gesture_hook_bindings lock poisoned — watcher will keep stale bindings"
                 );
             }
         }

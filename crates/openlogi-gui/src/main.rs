@@ -12,6 +12,7 @@ mod app_watcher;
 mod asset;
 mod components;
 mod data;
+mod gesture_watcher;
 mod hardware;
 mod inventory_watcher;
 mod launch_agent;
@@ -29,13 +30,17 @@ use std::sync::{Arc, RwLock};
 /// Shared binding map threaded between `AppState` and the hook callback.
 type BindingMap = Arc<RwLock<BTreeMap<ButtonId, Action>>>;
 
+/// Shared gesture-direction binding map threaded between `AppState` and the
+/// gesture watcher thread.
+type GestureMap = Arc<RwLock<BTreeMap<GestureDirection, Action>>>;
+
 use anyhow::{Context as _, Result};
 use gpui::{
     AppContext, BorrowAppContext as _, Bounds, SharedString, Size, Styled, TitlebarOptions,
     WindowBounds, WindowOptions, px,
 };
 use gpui_component::{ActiveTheme, Root, Theme, ThemeMode};
-use openlogi_core::binding::{Action, ButtonId};
+use openlogi_core::binding::{Action, ButtonId, GestureDirection};
 use openlogi_core::config::Config;
 use openlogi_core::device::{DeviceInventory, DeviceModelInfo};
 use openlogi_hook::{EventDisposition, Hook, MouseEvent};
@@ -86,8 +91,13 @@ fn main() -> Result<()> {
     }
     drop(probe_cache);
 
-    let (hook_bindings, dpi_cycle, initial_config) = load_config_and_bindings(&inventories);
+    let (hook_bindings, gesture_bindings, dpi_cycle, initial_config) =
+        load_config_and_bindings(&inventories);
     let hook_arcs = (Arc::clone(&hook_bindings), Arc::clone(&dpi_cycle));
+
+    // Gesture capture runs independently of the CGEventTap hook (it needs no
+    // Accessibility permission), so start it up front for the active device.
+    gesture_watcher::spawn(Arc::clone(&gesture_bindings), Arc::clone(&dpi_cycle));
 
     let mut inventory_rx = inventory_watcher::spawn(std::time::Duration::from_secs(2));
     let mut app_rx = app_watcher::spawn(std::time::Duration::from_secs(1));
@@ -126,6 +136,7 @@ fn main() -> Result<()> {
                         &inventories,
                         &cache,
                         hook_bindings,
+                        gesture_bindings,
                         dpi_cycle,
                     ));
                 }
@@ -190,12 +201,12 @@ fn main() -> Result<()> {
 
 /// Load config from disk and build the initial hook-shared state using the
 /// same selection and binding rules as [`AppState::with_runtime_shared`].
-/// Pre-populating both `Arc`s here means the hook callback sees the right
-/// bindings *and* DPI presets from the very first event, well before the GPUI
-/// global is installed.
+/// Pre-populating these `Arc`s here means the hook and gesture watcher see the
+/// right bindings, gestures, *and* DPI presets from the very first event, well
+/// before the GPUI global is installed.
 fn load_config_and_bindings(
     inventories: &[DeviceInventory],
-) -> (BindingMap, Arc<RwLock<DpiCycleState>>, Config) {
+) -> (BindingMap, GestureMap, Arc<RwLock<DpiCycleState>>, Config) {
     let config = match Config::load_or_default() {
         Ok(c) => c,
         Err(e) => {
@@ -205,11 +216,13 @@ fn load_config_and_bindings(
     };
 
     let cache = asset::AssetResolver::new();
-    let (bindings, dpi_cycle) = AppState::initial_hook_state(&config, inventories, &cache);
+    let (bindings, gesture_bindings, dpi_cycle) =
+        AppState::initial_hook_state(&config, inventories, &cache);
     let bindings_arc = Arc::new(RwLock::new(bindings));
+    let gesture_arc = Arc::new(RwLock::new(gesture_bindings));
     let dpi_cycle_arc = Arc::new(RwLock::new(dpi_cycle));
 
-    (bindings_arc, dpi_cycle_arc, config)
+    (bindings_arc, gesture_arc, dpi_cycle_arc, config)
 }
 
 /// Attempt to start the OS hook. Returns `None` if Accessibility is not

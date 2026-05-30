@@ -12,7 +12,6 @@ use crate::app_menu::{Minimize, Zoom};
 use crate::asset::AssetResolver;
 use crate::components::device_carousel::DeviceCarousel;
 use crate::components::dpi_panel::DpiPanel;
-use crate::components::gesture_pad::GesturePad;
 use crate::mouse_model::view::MouseModelView;
 use crate::state::AppState;
 use crate::theme::{self, FOOTER_H, HEADER_H, Palette};
@@ -22,7 +21,6 @@ pub struct AppView {
     carousel: Entity<DeviceCarousel>,
     mouse_model: Entity<MouseModelView>,
     dpi_panel: Entity<DpiPanel>,
-    gesture_pad: Entity<GesturePad>,
     #[allow(dead_code, reason = "held to keep the appearance observer alive")]
     appearance_obs: Option<Subscription>,
     accessibility_dismissed: bool,
@@ -63,12 +61,10 @@ impl AppView {
         let carousel = cx.new(|cx| DeviceCarousel::new(inventories, cx));
         let mouse_model = cx.new(MouseModelView::new);
         let dpi_panel = cx.new(DpiPanel::new);
-        let gesture_pad = cx.new(GesturePad::new);
         Self {
             carousel,
             mouse_model,
             dpi_panel,
-            gesture_pad,
             appearance_obs: None,
             accessibility_dismissed: false,
         }
@@ -169,12 +165,7 @@ impl Render for AppView {
             .on_action(|_: &Minimize, window, _| window.minimize_window())
             .on_action(|_: &Zoom, window, _| window.zoom_window())
             .child(header(&self.carousel, pal))
-            .child(body(
-                &self.mouse_model,
-                &self.dpi_panel,
-                &self.gesture_pad,
-                pal,
-            ))
+            .child(body(&self.mouse_model, &self.dpi_panel))
             .child(footer(pal))
             .into_any_element()
     }
@@ -198,12 +189,7 @@ fn header(carousel: &Entity<DeviceCarousel>, pal: Palette) -> impl IntoElement {
         .child(div().flex_1().min_w_0().child(carousel.clone()))
 }
 
-fn body(
-    mouse_model: &Entity<MouseModelView>,
-    dpi_panel: &Entity<DpiPanel>,
-    gesture_pad: &Entity<GesturePad>,
-    pal: Palette,
-) -> impl IntoElement {
+fn body(mouse_model: &Entity<MouseModelView>, dpi_panel: &Entity<DpiPanel>) -> impl IntoElement {
     h_flex()
         .flex_1()
         .w_full()
@@ -213,17 +199,7 @@ fn body(
         .gap_6()
         .p_6()
         .child(mouse_model.clone())
-        .child(
-            v_flex()
-                .gap_6()
-                .child(dpi_panel.clone())
-                .child(panel_label("Gestures", pal))
-                .child(gesture_pad.clone()),
-        )
-}
-
-fn panel_label(text: &'static str, pal: Palette) -> impl IntoElement {
-    div().text_sm().text_color(pal.text_muted).child(text)
+        .child(dpi_panel.clone())
 }
 
 fn footer(pal: Palette) -> impl IntoElement {
