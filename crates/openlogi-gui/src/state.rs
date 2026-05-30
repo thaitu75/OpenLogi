@@ -51,12 +51,6 @@ pub struct AppState {
     /// The hotspot the user most recently armed by clicking. Drives the
     /// "selected button" outline on the mouse model and the popover content.
     pub active_button: Option<ButtonId>,
-    /// Which gesture sub-direction is currently being edited inside the
-    /// gesture-button popover. `None` means the popover is on the
-    /// directions-list "page"; `Some(dir)` means it's drilled into the
-    /// action picker for that direction. Pure UI scratch state — not
-    /// persisted to disk.
-    pub gesture_edit: Option<GestureDirection>,
     /// Whether the process holds macOS Accessibility permission. Drives the
     /// permission gate; flipped by the accessibility watcher when the user
     /// grants access. Always `true` on platforms without the concept.
@@ -137,7 +131,6 @@ impl AppState {
             current_device,
             current_app_bundle: None,
             active_button: None,
-            gesture_edit: None,
             accessibility_granted: Hook::has_accessibility(),
             button_bindings: BTreeMap::new(),
             gesture_bindings: BTreeMap::new(),
