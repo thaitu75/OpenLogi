@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use openlogi_core::binding::{Action, ButtonId};
+use openlogi_hid::CaptureChannel;
 use openlogi_hook::{EventDisposition, Hook, MouseEvent};
 use tracing::{info, warn};
 
@@ -20,7 +21,11 @@ pub type BindingMap = Arc<RwLock<BTreeMap<ButtonId, Action>>>;
 
 /// Attempt to start the OS hook. Returns `None` if Accessibility is not
 /// granted or on an unsupported platform — the app continues without crashing.
-pub fn start(bindings: BindingMap, dpi_cycle: Arc<RwLock<DpiCycleState>>) -> Option<Hook> {
+pub fn start(
+    bindings: BindingMap,
+    dpi_cycle: Arc<RwLock<DpiCycleState>>,
+    capture: CaptureChannel,
+) -> Option<Hook> {
     if !Hook::has_accessibility() {
         warn!(
             "Accessibility not granted — events will not be captured. \
@@ -58,7 +63,7 @@ pub fn start(bindings: BindingMap, dpi_cycle: Arc<RwLock<DpiCycleState>>) -> Opt
 
             if pressed {
                 info!(button = %id, action = %action.label(), "button → executing bound action");
-                dispatch_action(&action, &dpi_cycle);
+                dispatch_action(&action, &dpi_cycle, &capture);
             }
             EventDisposition::Suppress
         }
@@ -95,7 +100,12 @@ fn is_native_click(id: ButtonId, action: &Action) -> bool {
 /// `dpi_cycle` is held across a write lock long enough to advance the index
 /// and snapshot the new DPI + target; the actual HID write spawns its own
 /// thread via [`write_dpi_in_background`] to keep event callbacks non-blocking.
-pub fn dispatch_action(action: &Action, dpi_cycle: &Arc<RwLock<DpiCycleState>>) {
+/// `capture` lets those writes reuse the capture session's open channel.
+pub fn dispatch_action(
+    action: &Action,
+    dpi_cycle: &Arc<RwLock<DpiCycleState>>,
+    capture: &CaptureChannel,
+) {
     let next = match action {
         Action::CycleDpiPresets => match dpi_cycle.write() {
             Ok(mut guard) => guard.cycle(),
@@ -114,7 +124,7 @@ pub fn dispatch_action(action: &Action, dpi_cycle: &Arc<RwLock<DpiCycleState>>) 
         Action::ToggleSmartShift => {
             let target = dpi_cycle.read().ok().and_then(|g| g.target.clone());
             info!("SmartShift toggle → flipping wheel mode");
-            toggle_smartshift_in_background(target);
+            toggle_smartshift_in_background(Some(capture), target);
             return;
         }
         other => {
@@ -124,7 +134,7 @@ pub fn dispatch_action(action: &Action, dpi_cycle: &Arc<RwLock<DpiCycleState>>) 
     };
     if let Some((dpi, target)) = next {
         info!(dpi, "DPI action → writing to device");
-        write_dpi_in_background(target, dpi);
+        write_dpi_in_background(Some(capture), target, dpi);
     } else if matches!(action, Action::CycleDpiPresets | Action::SetDpiPreset(_)) {
         info!(
             action = %action.label(),

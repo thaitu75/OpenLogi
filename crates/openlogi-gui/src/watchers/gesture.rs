@@ -21,7 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use openlogi_core::binding::{Action, ButtonId, GestureDirection, default_binding};
-use openlogi_hid::{CapturedInput, GestureTarget, run_capture_session};
+use openlogi_hid::{CaptureChannel, CapturedInput, GestureTarget, run_capture_session};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
@@ -44,6 +44,7 @@ pub fn spawn(
     button_bindings: BindingMap,
     gesture_bindings: GestureBindings,
     dpi_cycle: Arc<RwLock<DpiCycleState>>,
+    capture_channel: CaptureChannel,
 ) {
     thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -56,7 +57,12 @@ pub fn spawn(
                 return;
             }
         };
-        runtime.block_on(manage(button_bindings, gesture_bindings, dpi_cycle));
+        runtime.block_on(manage(
+            button_bindings,
+            gesture_bindings,
+            dpi_cycle,
+            capture_channel,
+        ));
     });
 }
 
@@ -78,6 +84,7 @@ async fn manage(
     button_bindings: BindingMap,
     gesture_bindings: GestureBindings,
     dpi_cycle: Arc<RwLock<DpiCycleState>>,
+    capture_channel: CaptureChannel,
 ) {
     let (tx, mut rx) = mpsc::unbounded_channel::<CapturedInput>();
     let mut current: Option<(DpiTarget, bool)> = None;
@@ -87,7 +94,7 @@ async fn manage(
     loop {
         tokio::select! {
             Some(input) = rx.recv() => {
-                dispatch(input, &button_bindings, &gesture_bindings, &dpi_cycle);
+                dispatch(input, &button_bindings, &gesture_bindings, &dpi_cycle, &capture_channel);
             }
             _ = ticker.tick() => {
                 let target = dpi_cycle.read().ok().and_then(|guard| guard.target.clone());
@@ -109,10 +116,16 @@ async fn manage(
                         receiver_uid: Some(target.receiver_uid),
                         slot: target.slot,
                     };
+                    let slot = Arc::clone(&capture_channel);
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            run_capture_session(capture_target, capture_thumbwheel, sink, stop_rx)
-                                .await
+                        if let Err(e) = run_capture_session(
+                            capture_target,
+                            capture_thumbwheel,
+                            sink,
+                            stop_rx,
+                            slot,
+                        )
+                        .await
                         {
                             debug!(error = %e, "capture session ended");
                         }
@@ -130,6 +143,7 @@ fn dispatch(
     button_bindings: &BindingMap,
     gesture_bindings: &GestureBindings,
     dpi_cycle: &Arc<RwLock<DpiCycleState>>,
+    capture: &CaptureChannel,
 ) {
     match input {
         CapturedInput::Gesture(direction) => {
@@ -139,7 +153,7 @@ fn dispatch(
                 .and_then(|guard| guard.get(&direction).cloned());
             if let Some(action) = action {
                 debug!(?direction, action = %action.label(), "gesture → action");
-                hook_runtime::dispatch_action(&action, dpi_cycle);
+                hook_runtime::dispatch_action(&action, dpi_cycle, capture);
             } else {
                 debug!(?direction, "gesture with no binding — ignored");
             }
@@ -151,7 +165,7 @@ fn dispatch(
                 .and_then(|guard| guard.get(&button).cloned());
             if let Some(action) = action {
                 debug!(?button, action = %action.label(), "HID++ button → action");
-                hook_runtime::dispatch_action(&action, dpi_cycle);
+                hook_runtime::dispatch_action(&action, dpi_cycle, capture);
             } else {
                 debug!(?button, "HID++ button with no binding — ignored");
             }

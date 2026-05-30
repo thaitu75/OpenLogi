@@ -15,7 +15,7 @@
 //! re-synthesises scroll from the [`CapturedInput::Scroll`] deltas — the wheel
 //! is therefore only diverted when its click is actually bound.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use hidpp::{
     channel::HidppChannel,
@@ -31,6 +31,12 @@ use tracing::{debug, info, warn};
 use crate::reprog_controls::{self, RawControlEvent, ReprogControlsV4};
 use crate::thumbwheel::{self, Thumbwheel};
 use crate::transport::{enumerate_hidpp_devices, open_hidpp_channel};
+use crate::write::SharedChannel;
+
+/// Shared slot holding the active capture session's open channel, so DPI /
+/// SmartShift writes can reuse it instead of opening a fresh one. `None`
+/// whenever no session is connected.
+pub type CaptureChannel = Arc<RwLock<Option<SharedChannel>>>;
 
 /// Which device to capture from. Mirrors how DPI / SmartShift writes target a
 /// device: an optional Bolt receiver UID plus a pairing slot.
@@ -104,9 +110,20 @@ pub async fn run_capture_session(
     capture_thumbwheel: bool,
     sink: mpsc::UnboundedSender<CapturedInput>,
     shutdown: oneshot::Receiver<()>,
+    channel_slot: CaptureChannel,
 ) -> Result<(), GestureError> {
     let chan = open_target_channel(&target).await?;
     let armed = arm_controls(&chan, target.slot, capture_thumbwheel).await?;
+
+    // Publish this device's open channel so DPI/SmartShift writes reuse it
+    // instead of opening their own. Cleared on the way out.
+    if let Ok(mut slot) = channel_slot.write() {
+        *slot = Some(SharedChannel::new(
+            Arc::clone(&chan),
+            target.receiver_uid.clone(),
+            target.slot,
+        ));
+    }
 
     let accum = Arc::new(Mutex::new(CaptureAccum::default()));
     let reprog_index = armed.reprog.as_ref().map(|(_, idx)| *idx);
@@ -153,6 +170,9 @@ pub async fn run_capture_session(
     let _ = shutdown.await;
 
     chan.remove_msg_listener(hdl);
+    if let Ok(mut slot) = channel_slot.write() {
+        *slot = None;
+    }
     armed.disarm().await;
     debug!(slot = target.slot, "control capture stopped");
     Ok(())

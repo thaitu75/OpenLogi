@@ -80,7 +80,7 @@ impl DpiPanel {
                         let target = cx
                             .try_global::<AppState>()
                             .and_then(|s| s.current_record().and_then(|r| r.dpi_target.clone()));
-                        write_dpi_in_background(target, dpi);
+                        write_dpi_in_background(None, target, dpi);
                     }
                 },
             );
@@ -188,7 +188,7 @@ fn preset_chip(idx: usize, value: u32, active: bool, presets: &[u32], pal: Palet
                         .try_global::<AppState>()
                         .and_then(|s| s.current_record().and_then(|r| r.dpi_target.clone()));
                     cx.update_global::<AppState, _>(|state, _| state.dpi = value);
-                    write_dpi_in_background(target, value);
+                    write_dpi_in_background(None, target, value);
                     cx.refresh_windows();
                 }),
         )

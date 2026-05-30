@@ -86,7 +86,14 @@ fn main() -> Result<()> {
 
     let (hook_bindings, gesture_bindings, dpi_cycle, initial_config) =
         load_config_and_bindings(&inventories);
-    let hook_arcs = (Arc::clone(&hook_bindings), Arc::clone(&dpi_cycle));
+    // The capture session publishes its open HID++ channel here so DPI /
+    // SmartShift writes reuse it instead of opening their own.
+    let capture_channel: openlogi_hid::CaptureChannel = Arc::new(RwLock::new(None));
+    let hook_arcs = (
+        Arc::clone(&hook_bindings),
+        Arc::clone(&dpi_cycle),
+        Arc::clone(&capture_channel),
+    );
 
     // Resolve the UI locale before any menu or window is built so the first
     // frame already renders in the right language.
@@ -99,6 +106,7 @@ fn main() -> Result<()> {
         Arc::clone(&hook_bindings),
         Arc::clone(&gesture_bindings),
         Arc::clone(&dpi_cycle),
+        Arc::clone(&capture_channel),
     );
 
     let mut inventory_rx = watchers::inventory::spawn(std::time::Duration::from_secs(2));
@@ -112,19 +120,19 @@ fn main() -> Result<()> {
     gpui_platform::application()
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx| {
-        gpui_component::init(cx);
-        app_menu::install(cx);
+            gpui_component::init(cx);
+            app_menu::install(cx);
 
-        // Publish the pairing control sender + initial UI state so the Add
-        // Device window's buttons can drive the watcher via globals.
-        cx.set_global(windows::add_device::PairingControl(pairing_ctrl_tx));
-        cx.set_global(windows::add_device::PairingUi::Idle);
+            // Publish the pairing control sender + initial UI state so the Add
+            // Device window's buttons can drive the watcher via globals.
+            cx.set_global(windows::add_device::PairingControl(pairing_ctrl_tx));
+            cx.set_global(windows::add_device::PairingUi::Idle);
 
-        if !Hook::has_accessibility() {
-            Hook::prompt_accessibility();
-        }
+            if !Hook::has_accessibility() {
+                Hook::prompt_accessibility();
+            }
 
-        cx.spawn(async move |cx| {
+            cx.spawn(async move |cx| {
             let options = cx.update(main_window_options);
 
             #[allow(
@@ -188,8 +196,11 @@ fn main() -> Result<()> {
                         });
                         if granted && hook_handle.is_none() {
                             info!("accessibility granted — installing OS mouse hook");
-                            hook_handle =
-                                hook_runtime::start(Arc::clone(&hook_arcs.0), Arc::clone(&hook_arcs.1));
+                            hook_handle = hook_runtime::start(
+                                Arc::clone(&hook_arcs.0),
+                                Arc::clone(&hook_arcs.1),
+                                Arc::clone(&hook_arcs.2),
+                            );
                         }
                     }
                     Some(event) = pairing_evt_rx.recv() => {
@@ -202,7 +213,7 @@ fn main() -> Result<()> {
             }
         })
         .detach();
-    });
+        });
 
     Ok(())
 }

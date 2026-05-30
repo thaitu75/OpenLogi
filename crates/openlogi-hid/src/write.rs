@@ -155,38 +155,47 @@ pub async fn get_smartshift_status(
 
 pub async fn set_dpi(receiver_uid: Option<&str>, slot: u8, dpi: u16) -> Result<(), WriteError> {
     with_device(receiver_uid, slot, |channel| async move {
-        let mut device = Device::new(Arc::clone(&channel), slot)
-            .await
-            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
-        let feature = open_feature::<AdjustableDpiFeatureV0>(&mut device, slot).await?;
-        feature
-            .set_sensor_dpi(0, dpi)
-            .await
-            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
-        // PLAN.md "outstanding minor items": read back to confirm the
-        // firmware accepted the value. A mismatch is a silent failure
-        // mode that's otherwise invisible — devices in low-power states
-        // or with unsupported DPI ranges can ACK the write yet keep the
-        // old value. We log a warning but still return Ok because the
-        // request reached the device.
-        if let Ok(actual) = feature.get_sensor_dpi(0).await {
-            if actual == dpi {
-                debug!(slot, dpi, "wrote DPI (verified)");
-            } else {
-                tracing::warn!(
-                    slot,
-                    requested = dpi,
-                    actual,
-                    "DPI write accepted but device reports a different value — \
-                     likely out of the device's supported range"
-                );
-            }
-        } else {
-            debug!(slot, dpi, "wrote DPI (read-back skipped)");
-        }
-        Ok(())
+        set_dpi_on_channel(&channel, slot, dpi).await
     })
     .await
+}
+
+/// The DPI write itself, on an already-open channel. Shared by [`set_dpi`]
+/// (which opens a fresh channel) and [`set_dpi_on`] (which reuses one).
+async fn set_dpi_on_channel(
+    channel: &Arc<HidppChannel>,
+    slot: u8,
+    dpi: u16,
+) -> Result<(), WriteError> {
+    let mut device = Device::new(Arc::clone(channel), slot)
+        .await
+        .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+    let feature = open_feature::<AdjustableDpiFeatureV0>(&mut device, slot).await?;
+    feature
+        .set_sensor_dpi(0, dpi)
+        .await
+        .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
+    // Read back to confirm the firmware accepted the value. A mismatch is a
+    // silent failure mode that's otherwise invisible — devices in low-power
+    // states or with unsupported DPI ranges can ACK the write yet keep the old
+    // value. We log a warning but still return Ok because the request reached
+    // the device.
+    if let Ok(actual) = feature.get_sensor_dpi(0).await {
+        if actual == dpi {
+            debug!(slot, dpi, "wrote DPI (verified)");
+        } else {
+            tracing::warn!(
+                slot,
+                requested = dpi,
+                actual,
+                "DPI write accepted but device reports a different value — \
+                 likely out of the device's supported range"
+            );
+        }
+    } else {
+        debug!(slot, dpi, "wrote DPI (read-back skipped)");
+    }
+    Ok(())
 }
 
 /// Toggle SmartShift mode (free ↔ ratchet) on `slot`. Reads the current
@@ -200,23 +209,81 @@ pub async fn toggle_smartshift(
     slot: u8,
 ) -> Result<SmartShiftMode, WriteError> {
     with_device(receiver_uid, slot, |channel| async move {
-        let mut device = Device::new(Arc::clone(&channel), slot)
-            .await
-            .map_err(|_| WriteError::DeviceUnreachable { slot })?;
-        let feature = open_feature::<SmartShiftFeatureV0>(&mut device, slot).await?;
-        let SmartShiftStatus { mode, sensitivity } = feature
-            .get_status()
-            .await
-            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
-        let next = mode.flipped();
-        feature
-            .set_status(next, sensitivity)
-            .await
-            .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
-        debug!(slot, ?next, "wrote SmartShift mode");
-        Ok(next)
+        toggle_smartshift_on_channel(&channel, slot).await
     })
     .await
+}
+
+/// The SmartShift toggle itself, on an already-open channel. Shared by
+/// [`toggle_smartshift`] and [`toggle_smartshift_on`].
+async fn toggle_smartshift_on_channel(
+    channel: &Arc<HidppChannel>,
+    slot: u8,
+) -> Result<SmartShiftMode, WriteError> {
+    let mut device = Device::new(Arc::clone(channel), slot)
+        .await
+        .map_err(|_| WriteError::DeviceUnreachable { slot })?;
+    let feature = open_feature::<SmartShiftFeatureV0>(&mut device, slot).await?;
+    let SmartShiftStatus { mode, sensitivity } = feature
+        .get_status()
+        .await
+        .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
+    let next = mode.flipped();
+    feature
+        .set_status(next, sensitivity)
+        .await
+        .map_err(|e| WriteError::Hidpp(format!("{e:?}")))?;
+    debug!(slot, ?next, "wrote SmartShift mode");
+    Ok(next)
+}
+
+/// An open HID++ channel to a paired device, shared so DPI / SmartShift writes
+/// can reuse the capture session's connection instead of re-enumerating and
+/// opening a fresh channel each time (which costs ~100ms+).
+///
+/// Cheap to clone (an `Arc` plus the routing identity). Built by the capture
+/// session via [`SharedChannel::new`] and stashed in a slot the GUI's write
+/// path consults.
+#[derive(Clone)]
+pub struct SharedChannel {
+    channel: Arc<HidppChannel>,
+    receiver_uid: Option<String>,
+    slot: u8,
+}
+
+impl SharedChannel {
+    /// Wrap an open channel routed to `(receiver_uid, slot)`.
+    #[must_use]
+    pub(crate) fn new(channel: Arc<HidppChannel>, receiver_uid: Option<String>, slot: u8) -> Self {
+        Self {
+            channel,
+            receiver_uid,
+            slot,
+        }
+    }
+
+    /// Whether this channel targets `(receiver_uid, slot)` — so the write path
+    /// only reuses it for the device it actually points at.
+    #[must_use]
+    pub fn matches(&self, receiver_uid: Option<&str>, slot: u8) -> bool {
+        self.slot == slot
+            && match (self.receiver_uid.as_deref(), receiver_uid) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+/// Write DPI on an already-open [`SharedChannel`] — the fast path that skips
+/// enumeration and channel setup.
+pub async fn set_dpi_on(shared: &SharedChannel, dpi: u16) -> Result<(), WriteError> {
+    set_dpi_on_channel(&shared.channel, shared.slot, dpi).await
+}
+
+/// Toggle SmartShift on an already-open [`SharedChannel`].
+pub async fn toggle_smartshift_on(shared: &SharedChannel) -> Result<SmartShiftMode, WriteError> {
+    toggle_smartshift_on_channel(&shared.channel, shared.slot).await
 }
 
 /// Boilerplate-eater: enumerate HID candidates, find a matching Bolt

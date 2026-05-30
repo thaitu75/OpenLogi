@@ -17,7 +17,9 @@ pub mod smartshift;
 pub mod thumbwheel;
 pub mod write;
 
-pub use gesture::{CapturedInput, GestureError, GestureTarget, run_capture_session};
+pub use gesture::{
+    CaptureChannel, CapturedInput, GestureError, GestureTarget, run_capture_session,
+};
 pub use inventory::{InventoryError, enumerate};
 pub use pairing::{
     Click, DiscoveredDevice, PairingCommand, PairingError, PairingEvent, PairingReceiver,
@@ -25,6 +27,6 @@ pub use pairing::{
 };
 pub use smartshift::{SmartShiftMode, SmartShiftStatus};
 pub use write::{
-    FeatureEntry, WriteError, dump_features, get_dpi, get_smartshift_status, set_dpi,
-    toggle_smartshift,
+    FeatureEntry, SharedChannel, WriteError, dump_features, get_dpi, get_smartshift_status,
+    set_dpi, set_dpi_on, toggle_smartshift, toggle_smartshift_on,
 };
