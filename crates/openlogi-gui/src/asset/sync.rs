@@ -61,7 +61,8 @@ pub fn sync(server: &str, models: &[DeviceModelInfo]) -> Result<()> {
     fs::create_dir_all(&cache_root)
         .with_context(|| format!("create cache root {}", cache_root.display()))?;
 
-    let index = match http::fetch_index_to_dir(server, &cache_root) {
+    let client = http::AssetClient::new(server);
+    let index = match client.fetch_index_to_dir(&cache_root) {
         Ok(idx) => idx,
         Err(e) => {
             warn!(error = ?e, "index.json fetch failed — proceeding with cached files");
@@ -93,7 +94,7 @@ pub fn sync(server: &str, models: &[DeviceModelInfo]) -> Result<()> {
     }
 
     for (depot, entry, ext) in &targets {
-        if let Err(e) = sync_depot(server, &cache_root, depot, entry, *ext) {
+        if let Err(e) = sync_depot(&client, &cache_root, depot, entry, *ext) {
             warn!(depot, error = %e, "depot sync failed");
         }
     }
@@ -102,7 +103,7 @@ pub fn sync(server: &str, models: &[DeviceModelInfo]) -> Result<()> {
 }
 
 fn sync_depot(
-    server: &str,
+    client: &http::AssetClient,
     cache_root: &Path,
     depot: &str,
     entry: &DeviceEntry,
@@ -114,7 +115,7 @@ fn sync_depot(
     // Baseline: metadata + manifest + base PNG. Manifest is mandatory
     // so the variant lookup below has something to consult.
     for name in FETCH_FILES {
-        fetch_to_cache(server, &entry.asset_path, &dir, entry, name)?;
+        fetch_to_cache(client, &entry.asset_path, &dir, entry, name)?;
     }
 
     // Dedicated buttons render — only present on devices whose manifest
@@ -122,7 +123,7 @@ fn sync_depot(
     // when the registry lists it so front-only devices don't 404; failure
     // is non-fatal (the GUI falls back to `front_core.png`).
     if entry.files.iter().any(|f| f.name == "side_core.png") {
-        if let Err(e) = fetch_to_cache(server, &entry.asset_path, &dir, entry, "side_core.png") {
+        if let Err(e) = fetch_to_cache(client, &entry.asset_path, &dir, entry, "side_core.png") {
             warn!(depot, error = %e, "side_core.png fetch failed");
         }
     }
@@ -142,7 +143,7 @@ fn sync_depot(
         if variant == "front_core.png" || variant == "side_core.png" {
             continue;
         }
-        if let Err(e) = fetch_to_cache(server, &entry.asset_path, &dir, entry, &variant) {
+        if let Err(e) = fetch_to_cache(client, &entry.asset_path, &dir, entry, &variant) {
             warn!(depot, variant = %variant, error = %e, "variant fetch failed");
         }
     }
@@ -154,7 +155,7 @@ fn sync_depot(
 /// entry trips a warn but doesn't bail (some depots ship one-off files
 /// not yet rolled into the registry).
 fn fetch_to_cache(
-    server: &str,
+    client: &http::AssetClient,
     asset_path: &str,
     dir: &Path,
     entry: &DeviceEntry,
@@ -172,7 +173,7 @@ fn fetch_to_cache(
             "registry lists no entry — fetching without sha verify"
         );
     }
-    let bytes = http::fetch_file_to_dir(server, asset_path, dir, name)?;
+    let bytes = client.fetch_file_to_dir(asset_path, dir, name)?;
     info!(file = name, bytes, "downloaded");
     Ok(())
 }

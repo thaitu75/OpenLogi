@@ -63,10 +63,10 @@ pub struct SyncArgs {
 
 pub fn run(args: SyncArgs) -> Result<()> {
     let SyncArgs { base, out } = args;
-    let base = base.trim_end_matches('/').to_string();
     fs::create_dir_all(&out).with_context(|| format!("create {}", out.display()))?;
 
-    let index = http::fetch_index_to_dir(&base, &out)?;
+    let client = http::AssetClient::new(&base);
+    let index = client.fetch_index_to_dir(&out)?;
     println!("index.json: {} devices", index.devices.len());
 
     // Prune orphans so the bundle stays in sync with the registry.
@@ -113,7 +113,7 @@ pub fn run(args: SyncArgs) -> Result<()> {
                 cache_hits += 1;
                 continue;
             }
-            http::fetch_file_to_dir(&base, &entry.asset_path, &dir, &file_entry.name)?;
+            client.fetch_file_to_dir(&entry.asset_path, &dir, &file_entry.name)?;
             fetched += 1;
             println!("  {depot}/{} ({} B)", file_entry.name, file_entry.bytes);
         }
