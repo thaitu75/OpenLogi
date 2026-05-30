@@ -39,8 +39,8 @@ jobs:
           APPLE_ID: ${{ secrets.OP_APPLE_SECRET_ITEM }}/APPLE_ID
           APPLE_PASSWORD: ${{ secrets.OP_APPLE_SECRET_ITEM }}/APPLE_PASSWORD
           APPLE_TEAM_ID: ${{ secrets.OP_APPLE_SECRET_ITEM }}/APPLE_TEAM_ID
-          GITHUB_APP_ID: ${{ secrets.OP_HOMEBREW_TAP_APP_ITEM }}/GITHUB_APP_ID
-          GITHUB_APP_PRIVATE_KEY: ${{ secrets.OP_HOMEBREW_TAP_APP_ITEM }}/GITHUB_APP_PRIVATE_KEY
+          GITHUB_APP_ID: ${{ secrets.OP_GITHUB_APP_ITEM }}/GITHUB_APP_ID
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.OP_GITHUB_APP_ITEM }}/GITHUB_APP_PRIVATE_KEY
 
       - name: Install packaging tools
         run: |

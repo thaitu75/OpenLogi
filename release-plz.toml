@@ -1,0 +1,47 @@
+# release-plz configuration — https://release-plz.dev/docs/config
+#
+# Unified versioning: every published crate inherits `version.workspace = true`
+# from the root Cargo.toml, so the whole workspace moves on a single shared
+# version. `version_group` ties the crates together so they are always bumped and
+# released in lockstep (the highest next version among them wins), and a single
+# `v{version}` tag + GitHub Release is cut for the workspace as a whole — which is
+# what `.github/workflows/release.yml` listens on to build the macOS DMG.
+
+[workspace]
+# Per-crate tags/releases are off; the root crate owns the one workspace release.
+git_tag_enable = false
+git_release_enable = false
+
+[[package]]
+name = "openlogi"
+version_group = "openlogi"
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+git_release_enable = true
+git_release_name = "v{{ version }}"
+
+[[package]]
+name = "openlogi-core"
+version_group = "openlogi"
+
+[[package]]
+name = "openlogi-hid"
+version_group = "openlogi"
+
+[[package]]
+name = "openlogi-assets"
+version_group = "openlogi"
+
+[[package]]
+name = "openlogi-cli"
+version_group = "openlogi"
+
+[[package]]
+name = "openlogi-hook"
+version_group = "openlogi"
+
+# Not publishable (git-only gpui deps); keep release-plz out of it entirely.
+# Its version still follows the shared workspace version via inheritance.
+[[package]]
+name = "openlogi-gui"
+release = false
