@@ -4,8 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-export SDKROOT="${SDKROOT:-$(/usr/bin/xcrun --sdk macosx --show-sdk-path)}"
+# GPUI's build compiles Metal shaders, which need the real Xcode Metal
+# toolchain. A devenv/Nix shell injects a Nix apple-sdk via DEVELOPER_DIR
+# that has no `metal`, so force Xcode here — unconditionally, since the
+# `:-` default would otherwise defer to that broken value. Override the
+# Xcode location with OPENLOGI_DEVELOPER_DIR if it lives elsewhere.
+export DEVELOPER_DIR="${OPENLOGI_DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+export SDKROOT="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
 
 echo "==> app icon"
 "$ROOT/scripts/macos-icns.sh"
@@ -52,15 +57,20 @@ curl -fsSL "$BG_URL" -o "$BG_TIFF" || {
   exit 1
 }
 
-# Geometry below is locked to the painted background (design/bg/*.svg):
-# window 760x480, app slot under the bloom at 212,250, drop link at 548,250.
+# Geometry below is locked to the painted background (design/bg/*.svg), which
+# is 760x480. create-dmg's --window-size is the OUTER window (incl. title bar),
+# while the background fills only the content area below it; Finder draws the
+# background top-left-aligned without scaling, so a 480-tall window clips the
+# bottom of the art (the title bar is 32pt on this macOS). Window height is
+# therefore 480 + 32 = 512 so the content area is exactly 480 and nothing is
+# cut. Icon coords are content-area-relative, so they stay put.
 DMG="$ROOT/target/release/OpenLogi.dmg"
 rm -f "$DMG"
 create-dmg \
   --volname "OpenLogi" \
   --background "$BG_TIFF" \
   --window-pos 240 120 \
-  --window-size 760 480 \
+  --window-size 760 512 \
   --icon-size 128 \
   --icon "OpenLogi.app" 212 250 \
   --app-drop-link 548 250 \
