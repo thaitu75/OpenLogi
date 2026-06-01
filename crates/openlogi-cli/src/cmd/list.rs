@@ -114,8 +114,9 @@ fn format_model(m: &DeviceModelInfo) -> String {
         use std::fmt::Write as _;
         let _ = write!(unit, "{b:02x}");
     }
+    let serial = m.serial_number.as_deref().unwrap_or("—");
     format!(
-        "     model_ids=[{ids}] ext={:02x} unit_id={unit} transports={transports}",
+        "     model_ids=[{ids}] ext={:02x} serial={serial} unit_id={unit} transports={transports}",
         m.extended_model_id
     )
 }
