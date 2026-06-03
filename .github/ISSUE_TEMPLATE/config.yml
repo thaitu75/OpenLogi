@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 💬 Questions & Support (Telegram)
+  - name: 💬 Questions & Support (GitHub Discussions)
+    url: https://github.com/AprilNEA/OpenLogi/discussions
+    about: Usage questions, setup help, and how-tos. Please don't open an issue for support questions.
+  - name: 📣 Community Chat (Telegram)
     url: https://t.me/+u8DfyLlIqPYxZjJh
-    about: Usage questions, setup help, and general discussion. Please don't open an issue for support questions.
+    about: Casual chat and release announcements.
   - name: 📖 Documentation
     url: https://github.com/AprilNEA/OpenLogi/tree/master/docs
     about: Install, usage, and configuration guides — check here first.
