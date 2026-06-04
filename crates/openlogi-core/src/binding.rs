@@ -1444,7 +1444,8 @@ mod linux {
                 tracing::warn!("uinput action device mutex poisoned");
             }
         } else {
-            tracing::warn!("uinput action device unavailable");
+            // Device creation failed at init; already logged once in LazyLock.
+            tracing::debug!("uinput action device unavailable — action skipped");
         }
     }
 
@@ -1810,6 +1811,60 @@ mod tests {
             default_binding(ButtonId::DpiToggle),
             Action::CycleDpiPresets
         );
+    }
+
+    // ── modifiers_to_keycodes ─────────────────────────────────────────────────
+
+    #[cfg(target_os = "linux")]
+    mod modifier_mapping {
+        use evdev::KeyCode;
+
+        use crate::binding::{KeyCombo, linux::modifiers_to_keycodes};
+
+        #[test]
+        fn mod_cmd_alone_maps_to_ctrl() {
+            assert_eq!(
+                modifiers_to_keycodes(KeyCombo::MOD_CMD),
+                vec![KeyCode::KEY_LEFTCTRL]
+            );
+        }
+
+        #[test]
+        fn mod_ctrl_alone_maps_to_ctrl() {
+            assert_eq!(
+                modifiers_to_keycodes(KeyCombo::MOD_CTRL),
+                vec![KeyCode::KEY_LEFTCTRL]
+            );
+        }
+
+        #[test]
+        fn mod_cmd_and_ctrl_together_produce_single_ctrl() {
+            // Both bits set must not push KEY_LEFTCTRL twice.
+            assert_eq!(
+                modifiers_to_keycodes(KeyCombo::MOD_CMD | KeyCombo::MOD_CTRL),
+                vec![KeyCode::KEY_LEFTCTRL]
+            );
+        }
+
+        #[test]
+        fn all_modifiers_produce_canonical_order() {
+            let mods = modifiers_to_keycodes(
+                KeyCombo::MOD_CMD | KeyCombo::MOD_SHIFT | KeyCombo::MOD_OPTION,
+            );
+            assert_eq!(
+                mods,
+                vec![
+                    KeyCode::KEY_LEFTCTRL,
+                    KeyCode::KEY_LEFTSHIFT,
+                    KeyCode::KEY_LEFTALT
+                ]
+            );
+        }
+
+        #[test]
+        fn no_modifiers_produces_empty_vec() {
+            assert!(modifiers_to_keycodes(0).is_empty());
+        }
     }
 
     // ── macos_vk_to_linux ────────────────────────────────────────────────────
