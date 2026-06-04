@@ -315,8 +315,9 @@ pub enum Action {
     // ── System ────────────────────────────────────────────────────────────────
     /// Lock the screen (⌘⌃Q on macOS).
     ///
-    /// On Linux, calls `org.freedesktop.login1.Manager.LockSessions()` via the
-    /// system bus (compositor-agnostic, works as root), falling back to Super+L.
+    /// On Linux, calls `org.freedesktop.login1.Manager.LockSession($XDG_SESSION_ID)`
+    /// on the system bus (current session only). Falls back to Super+L when
+    /// `$XDG_SESSION_ID` is unset or on non-systemd systems.
     LockScreen,
     /// Capture a screenshot.
     Screenshot,
@@ -1368,8 +1369,7 @@ mod linux {
         KeyCode::KEY_HOME,  KeyCode::KEY_END,   KeyCode::KEY_PAGEUP,   KeyCode::KEY_PAGEDOWN,
         KeyCode::KEY_TAB,   KeyCode::KEY_ENTER, KeyCode::KEY_BACKSPACE, KeyCode::KEY_DELETE,
         KeyCode::KEY_ESC,   KeyCode::KEY_SPACE,
-        // Modifiers (KEY_LEFTMETA not emitted by any current action — reserved
-        // for future Super/Windows-key mappings once D-Bus per-app profiles land)
+        // Modifiers (KEY_LEFTMETA used by the LockScreen Super+L fallback)
         KeyCode::KEY_LEFTCTRL, KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_LEFTALT, KeyCode::KEY_LEFTMETA,
         // Function keys
         KeyCode::KEY_F1,  KeyCode::KEY_F2,  KeyCode::KEY_F3,  KeyCode::KEY_F4,
@@ -1608,25 +1608,27 @@ mod linux {
             .ok()
     });
 
-    /// Lock the screen via `org.freedesktop.login1.Manager.LockSessions()` on
-    /// the system bus, falling back to the Super+L key combo.
+    /// Lock the screen via logind `LockSession($XDG_SESSION_ID)` on the system
+    /// bus, falling back to Super+L.
     ///
-    /// logind is compositor-agnostic and accessible regardless of session bus
-    /// availability (e.g. under `sudo`). Super+L covers non-systemd systems.
+    /// Only the session identified by `$XDG_SESSION_ID` is locked; if the
+    /// variable is unset the D-Bus path is skipped entirely to avoid locking
+    /// all sessions on the machine. Super+L covers non-systemd systems and the
+    /// no-session-id case.
     pub(super) fn lock_screen() {
-        if let Some(conn) = SYSTEM_BUS.as_ref() {
+        if let (Some(conn), Ok(id)) = (SYSTEM_BUS.as_ref(), std::env::var("XDG_SESSION_ID")) {
             match conn.call_method(
                 Some("org.freedesktop.login1"),
                 "/org/freedesktop/login1",
                 Some("org.freedesktop.login1.Manager"),
-                "LockSessions",
-                &(),
+                "LockSession",
+                &(id.as_str(),),
             ) {
                 Ok(_) => {
                     tracing::debug!("LockScreen via logind");
                     return;
                 }
-                Err(e) => tracing::warn!("logind LockSessions failed: {e}"),
+                Err(e) => tracing::warn!("logind LockSession failed: {e}"),
             }
         }
         // Super+L is the standard lock shortcut on GNOME and KDE.
@@ -1635,10 +1637,10 @@ mod linux {
     }
 
     /// Send `command` to the first MPRIS-capable media player on the session bus,
-    /// falling back to the corresponding XF86 multimedia key if no player is found.
-    ///
-    /// MPRIS reliably targets the running player; the XF86 key covers apps that
-    /// accept multimedia keys but don't expose MPRIS.
+    /// falling back to the corresponding XF86 multimedia key only if no MPRIS
+    /// player is found. When a player is found but the call fails, the fallback
+    /// is suppressed to avoid double-toggling (the player likely handles the
+    /// XF86 key too).
     pub(super) fn mpris_command(command: &str) {
         if try_mpris_command(command).is_none() {
             let fallback = match command {
@@ -1679,8 +1681,10 @@ mod linux {
                 Some(())
             }
             Err(e) => {
-                tracing::debug!("MPRIS {command} on {player} failed: {e}, using key fallback");
-                None
+                // Player was identified — suppress XF86 fallback to avoid
+                // double-toggling if the player also handles multimedia keys.
+                tracing::warn!("MPRIS {command} on {player} failed: {e}");
+                Some(())
             }
         }
     }
