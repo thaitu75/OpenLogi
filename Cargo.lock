@@ -4622,6 +4622,7 @@ version = "0.5.1"
 dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.25.0",
+ "evdev",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
