@@ -7,6 +7,7 @@ use hidpp::{
     device::Device,
     feature::{
         device_information::DeviceInformationFeature,
+        device_type_and_name::{DeviceType as HidppDeviceType, DeviceTypeAndNameFeature},
         unified_battery::{
             BatteryLevel as HidppBatteryLevel, BatteryStatus as HidppBatteryStatus,
             UnifiedBatteryFeature,
@@ -130,28 +131,28 @@ async fn probe_one(dev: async_hid::Device) -> Result<Option<DeviceInventory>, In
         // Prefer event data when present — it's a live response. Fall back to
         // the pairing register for sleeping devices that didn't reply.
         let online = event.map_or(pairing.online, |c| c.online);
-        let kind = event.map_or(pairing.kind, |c| c.kind);
+        let bolt_kind = event.map_or(pairing.kind, |c| c.kind);
         let wpid = event.map(|c| c.wpid);
         debug!(
             slot,
             online,
             ?wpid,
-            ?kind,
+            ?bolt_kind,
             has_event = event.is_some(),
             codename = ?codename,
             "paired slot"
         );
 
-        let (battery, model_info) = if online {
+        let (battery, model_info, probed_kind) = if online {
             probe_features(&channel, slot).await
         } else {
-            (None, None)
+            (None, None, None)
         };
         paired.push(PairedDevice {
             slot,
             codename,
             wpid,
-            kind: map_kind(kind),
+            kind: resolve_device_kind(map_kind(bolt_kind), probed_kind),
             online,
             battery,
             model_info,
@@ -191,7 +192,7 @@ async fn probe_direct(
     channel: Arc<HidppChannel>,
     info: &async_hid::DeviceInfo,
 ) -> Option<DeviceInventory> {
-    let (battery, model_info) = probe_features(&channel, DIRECT_DEVICE_INDEX).await;
+    let (battery, model_info, probed_kind) = probe_features(&channel, DIRECT_DEVICE_INDEX).await;
     // Hybrid peripheral discriminator. A genuine directly-attached device is
     // either wireless/Bluetooth — which reports a battery — or wired, which
     // reports none but still exposes a control feature (adjustable DPI or
@@ -233,7 +234,12 @@ async fn probe_direct(
             slot: DIRECT_DEVICE_INDEX,
             codename: Some(info.name.clone()),
             wpid: None,
-            kind: DeviceKind::Unknown,
+            // No receiver pairing register on the direct path, so the HID++
+            // `0x0005` device-type probe is the only kind signal. Without it a
+            // Bluetooth-direct mouse would stay `Unknown` and lose its
+            // button/pointer tabs to the wired-keyboard lighting heuristic
+            // (issue #127).
+            kind: resolve_device_kind(DeviceKind::Unknown, probed_kind),
             online: true,
             battery,
             model_info,
@@ -279,25 +285,30 @@ async fn read_codename(channel: &HidppChannel, slot: u8) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Open a HID++ session for `slot` and query the two features we care about
-/// (battery, device-information) in one shot. Returns `(battery, model)` —
-/// either side may be `None` if the device doesn't expose that feature or
-/// the read fails. Device sessions are expensive (multi-round-trip) so we
-/// fold both reads through the same `Device::new` + `enumerate_features`.
+/// Open a HID++ session for `slot` and query the features we care about
+/// (battery, device-information, device-type) in one shot. Returns
+/// `(battery, model, kind)` — any field may be `None` if the device doesn't
+/// expose that feature or the read fails. Device sessions are expensive
+/// (multi-round-trip) so we fold every read through the same `Device::new` +
+/// `enumerate_features`.
 async fn probe_features(
     channel: &Arc<HidppChannel>,
     slot: u8,
-) -> (Option<BatteryInfo>, Option<DeviceModelInfo>) {
+) -> (
+    Option<BatteryInfo>,
+    Option<DeviceModelInfo>,
+    Option<DeviceKind>,
+) {
     let mut device = match Device::new(Arc::clone(channel), slot).await {
         Ok(d) => d,
         Err(e) => {
             debug!(slot, error = ?e, "Device::new failed");
-            return (None, None);
+            return (None, None, None);
         }
     };
     if let Err(e) = device.enumerate_features().await {
         debug!(slot, error = ?e, "enumerate_features failed");
-        return (None, None);
+        return (None, None, None);
     }
 
     let battery = match device.get_feature::<UnifiedBatteryFeature>() {
@@ -349,7 +360,21 @@ async fn probe_features(
         None => None,
     };
 
-    (battery, model_info)
+    // `0x0005` reports the device's marketing type (mouse, keyboard, …). On the
+    // direct path this is the only kind signal; on the Bolt path it backstops a
+    // pairing register that reported `Unknown`.
+    let kind = match device.get_feature::<DeviceTypeAndNameFeature>() {
+        Some(feature) => match feature.get_device_type().await {
+            Ok(ty) => Some(map_device_type(ty)),
+            Err(e) => {
+                debug!(slot, error = ?e, "DeviceType read failed");
+                None
+            }
+        },
+        None => None,
+    };
+
+    (battery, model_info, kind)
 }
 
 fn normalize_serial_number(serial: &str) -> Option<String> {
@@ -406,6 +431,37 @@ fn map_kind(k: BoltDeviceKind) -> DeviceKind {
     }
 }
 
+/// Map the HID++ `0x0005` marketing device type to our [`DeviceKind`]. Types we
+/// don't model (receiver, webcam, dock, …) fall back to [`DeviceKind::Unknown`].
+fn map_device_type(ty: HidppDeviceType) -> DeviceKind {
+    match ty {
+        HidppDeviceType::Keyboard => DeviceKind::Keyboard,
+        HidppDeviceType::Numpad => DeviceKind::Numpad,
+        HidppDeviceType::Mouse => DeviceKind::Mouse,
+        HidppDeviceType::Trackpad => DeviceKind::Touchpad,
+        HidppDeviceType::Trackball => DeviceKind::Trackball,
+        HidppDeviceType::Presenter => DeviceKind::Presenter,
+        HidppDeviceType::RemoteControl => DeviceKind::Remote,
+        HidppDeviceType::Headset => DeviceKind::Headset,
+        HidppDeviceType::Joystick => DeviceKind::Joystick,
+        HidppDeviceType::Gamepad => DeviceKind::Gamepad,
+        _ => DeviceKind::Unknown,
+    }
+}
+
+/// Resolve a device's kind from a `primary` source (the Bolt pairing register,
+/// or `Unknown` on the receiver-less direct path) and a `secondary` source (the
+/// HID++ `0x0005` probe). The primary wins unless it is [`DeviceKind::Unknown`],
+/// in which case we fall back to the probe — that's what keeps a Bluetooth-direct
+/// mouse from being mistaken for a wired keyboard (issue #127).
+fn resolve_device_kind(primary: DeviceKind, secondary: Option<DeviceKind>) -> DeviceKind {
+    if primary == DeviceKind::Unknown {
+        secondary.unwrap_or(DeviceKind::Unknown)
+    } else {
+        primary
+    }
+}
+
 fn map_battery_level(level: HidppBatteryLevel) -> BatteryLevel {
     match level {
         HidppBatteryLevel::Critical => BatteryLevel::Critical,
@@ -424,5 +480,38 @@ fn map_battery_status(status: HidppBatteryStatus) -> BatteryStatus {
         HidppBatteryStatus::Full => BatteryStatus::Full,
         HidppBatteryStatus::Error => BatteryStatus::Error,
         _ => BatteryStatus::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeviceKind, resolve_device_kind};
+
+    #[test]
+    fn resolve_kind_keeps_a_known_primary() {
+        // A Bolt register that already says "mouse" is authoritative; a stray
+        // `0x0005` answer must not override it.
+        assert_eq!(
+            resolve_device_kind(DeviceKind::Mouse, Some(DeviceKind::Keyboard)),
+            DeviceKind::Mouse
+        );
+    }
+
+    #[test]
+    fn resolve_kind_falls_back_to_the_probe_when_primary_unknown() {
+        // The direct path (and an Unknown Bolt register) defers to the probe —
+        // this is what restores the button/pointer tabs for a BT-direct mouse.
+        assert_eq!(
+            resolve_device_kind(DeviceKind::Unknown, Some(DeviceKind::Mouse)),
+            DeviceKind::Mouse
+        );
+    }
+
+    #[test]
+    fn resolve_kind_stays_unknown_without_a_probe() {
+        assert_eq!(
+            resolve_device_kind(DeviceKind::Unknown, None),
+            DeviceKind::Unknown
+        );
     }
 }
