@@ -63,7 +63,7 @@ pub(crate) fn start(
             let handle = thread::Builder::new()
                 .name(format!("openlogi-hook:{}", path.display()))
                 .spawn(move || {
-                    device_thread(path, device, virtual_device, cb_clone, stop_clone, rx)
+                    device_thread(path, device, virtual_device, cb_clone, stop_clone, rx);
                 })?;
             threads.push(handle);
             stop_pipes.push(tx);
@@ -118,11 +118,13 @@ fn signal_pipe(fd: &OwnedFd) {
 
 fn create_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0i32; 2];
-    // SAFETY: fds is a valid two-element array; pipe() fills it with two new fds on success.
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } < 0 {
+    // SAFETY: fds is a valid two-element array; pipe2() fills it with two new
+    // fds on success. O_CLOEXEC keeps the pipe from leaking into any child
+    // process the app spawns.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: pipe() succeeded, so both fds are valid open file descriptors we own.
+    // SAFETY: pipe2() succeeded, so both fds are valid open file descriptors we own.
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
@@ -256,10 +258,14 @@ fn device_thread(
     stop_rx: OwnedFd,
 ) {
     if let Err(e) = device.grab() {
+        // Without the exclusive grab the desktop still receives the physical
+        // events, so reading and re-injecting them here would duplicate every
+        // one. Skip this device instead — it stays usable, just un-hooked.
         warn!(
-            "failed to grab {} exclusively: {e} — button events will be duplicated",
+            "failed to grab {} exclusively: {e} — skipping (left un-hooked)",
             path.display()
         );
+        return;
     }
 
     let hires_scroll = device
@@ -273,7 +279,7 @@ fn device_thread(
 
     debug!("hook started on {}", path.display());
 
-    loop {
+    'read: loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
@@ -291,11 +297,21 @@ fn device_thread(
 
         for event in events {
             if let EventSummary::Synchronization(..) = event.destructure() {
-                // Flush pending pass-through events followed by the sync marker.
+                // Flush the report. `emit()` appends its own SYN_REPORT, so the
+                // incoming sync event is dropped rather than re-emitted — pushing
+                // it would send a redundant second SYN_REPORT.
                 if !pending.is_empty() {
-                    pending.push(event);
                     if let Err(e) = virtual_device.emit(&pending) {
-                        error!("uinput emit failed: {e}");
+                        // The physical device is grabbed, so these pass-through
+                        // events can't reach the desktop any other way. A uinput
+                        // emit failure means the virtual device is broken, so
+                        // stop here — dropping the grab restores normal input —
+                        // rather than silently dropping events on every report.
+                        error!(
+                            "uinput emit failed on {}: {e} — stopping hook for this device",
+                            path.display()
+                        );
+                        break 'read;
                     }
                     pending.clear();
                 }

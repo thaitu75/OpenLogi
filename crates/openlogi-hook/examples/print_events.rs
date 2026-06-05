@@ -17,11 +17,14 @@
 //! cargo run --example print_events -p openlogi-hook
 //! ```
 
-#![cfg(target_os = "linux")]
-
-use openlogi_hook::{EventDisposition, Hook};
-
+// Linux-only smoke test. A crate-level `#![cfg(target_os = "linux")]` would
+// leave an empty crate with no `main` on other targets (E0601), breaking
+// `cargo build --all-targets` there — so gate the body on `main` instead and
+// provide a trivial fallback.
+#[cfg(target_os = "linux")]
 fn main() {
+    use openlogi_hook::{EventDisposition, Hook};
+
     let hook = match Hook::start(|event| {
         println!("{event:?}");
         EventDisposition::PassThrough
@@ -46,4 +49,9 @@ fn main() {
 
     hook.stop();
     println!("Hook stopped.");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("print_events is a Linux-only smoke test (no-op on this platform).");
 }
