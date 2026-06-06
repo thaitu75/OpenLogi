@@ -4728,6 +4728,7 @@ dependencies = [
  "openlogi-hook",
  "rust-i18n",
  "sys-locale",
+ "tarpc",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

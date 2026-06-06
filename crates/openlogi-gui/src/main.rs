@@ -29,6 +29,11 @@ mod asset;
 mod components;
 mod data;
 mod i18n;
+#[allow(
+    dead_code,
+    reason = "IPC client; replaces the GUI's in-process device path in the next commit of the daemon split"
+)]
+mod ipc_client;
 mod mouse_model;
 mod platform;
 mod state;

@@ -21,6 +21,7 @@ openlogi-hid = { path = "../openlogi-hid" }
 openlogi-hook = { path = "../openlogi-hook" }
 openlogi-assets = { path = "../openlogi-assets" }
 openlogi-agent-core = { path = "../openlogi-agent-core" }
+tarpc = { version = "0.37", features = ["serde1", "serde-transport", "serde-transport-bincode", "tokio1", "unix"] }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
 gpui-component = { workspace = true }
