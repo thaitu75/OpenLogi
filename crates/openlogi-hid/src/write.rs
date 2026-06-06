@@ -19,6 +19,7 @@ use hidpp::{
     feature::smartshift::{SmartShiftFeature, WheelMode},
     protocol::v20::{ErrorType, Hidpp20Error},
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::debug;
 
@@ -42,7 +43,7 @@ pub enum WriteError {
 }
 
 /// Supported DPI values reported by a device's HID++ AdjustableDpi feature.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DpiCapabilities {
     values: Vec<u16>,
 }
@@ -136,7 +137,7 @@ impl DpiCapabilities {
 }
 
 /// Current DPI plus the supported values reported by the device.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DpiInfo {
     /// DPI currently configured on sensor 0.
     pub current: u16,

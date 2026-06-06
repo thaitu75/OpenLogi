@@ -21,6 +21,7 @@ use hidpp::{
     channel::HidppChannel,
     receiver::{self, Receiver},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::transport::{enumerate_hidpp_devices, open_hidpp_channel};
 
@@ -29,7 +30,7 @@ use crate::transport::{enumerate_hidpp_devices, open_hidpp_channel};
 pub const DIRECT_DEVICE_INDEX: u8 = 0xff;
 
 /// How to reach a controllable HID++ device.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeviceRoute {
     /// Paired to a Logi Bolt receiver. `receiver_uid` disambiguates multiple
     /// plugged-in receivers; `slot` is the device's pairing slot (1..=6).

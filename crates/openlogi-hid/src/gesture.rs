@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use hidpp::{channel::HidppChannel, device::Device, protocol::v20};
 use openlogi_core::binding::{ButtonId, GestureDirection, detect_swipe};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
@@ -35,7 +36,7 @@ use crate::write::SharedChannel;
 pub type CaptureChannel = Arc<RwLock<Option<SharedChannel>>>;
 
 /// One input captured from the active device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CapturedInput {
     /// A completed gesture-button swipe.
     Gesture(GestureDirection),

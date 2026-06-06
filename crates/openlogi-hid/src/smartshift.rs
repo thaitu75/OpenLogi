@@ -26,12 +26,15 @@ use hidpp::{
     protocol::v20::{self, Hidpp20Error},
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use serde::{Deserialize, Serialize};
 
 /// SmartShift mode values understood by the firmware. `Free` = free-spin,
 /// `Ratchet` = clicky / smartshift-off. The discriminant is the wire byte;
 /// reserved values (`0` / `3` / future) fail [`TryFrom`] and callers fall back
 /// to whatever they consider sane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive, Serialize, Deserialize,
+)]
 #[repr(u8)]
 pub enum SmartShiftMode {
     Free = 1,
@@ -55,7 +58,7 @@ impl SmartShiftMode {
 pub const AUTO_DISENGAGE_PERMANENT: u8 = 0xff;
 
 /// Snapshot returned from [`SmartShiftFeatureV0::get_status`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SmartShiftStatus {
     pub mode: SmartShiftMode,
     /// SmartShift speed threshold: `0x01`–`0xFE` in 0.25 turn/s steps (higher

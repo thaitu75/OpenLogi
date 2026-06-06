@@ -4,11 +4,11 @@
 //! CLI and any future GUI can depend on them without dragging in the protocol
 //! crate or its async transport.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What a paired peripheral is. Mirrors `hidpp::receiver::bolt::BoltDeviceKind`
 /// but is owned by us so consumers don't depend on `hidpp`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DeviceKind {
     Mouse,
@@ -26,7 +26,7 @@ pub enum DeviceKind {
 }
 
 /// Coarse battery bucket reported by the device firmware.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BatteryLevel {
     Critical,
@@ -38,7 +38,7 @@ pub enum BatteryLevel {
 
 /// Charging state. Mirrors `hidpp 0.2`'s `BatteryStatus` plus `Unknown` for
 /// values added in future protocol versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BatteryStatus {
     Discharging,
@@ -49,14 +49,14 @@ pub enum BatteryStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatteryInfo {
     pub percentage: u8,
     pub level: BatteryLevel,
     pub status: BatteryStatus,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiverInfo {
     pub name: String,
     pub vendor_id: u16,
@@ -73,7 +73,7 @@ pub struct ReceiverInfo {
 /// Options+ asset registry's `modelId` (e.g. `"6b023"`) is the concatenation
 /// of an extended-model byte and one of these PIDs, so callers usually want
 /// to format `extended_model_id` + `model_ids[N]` to match.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceModelInfo {
     pub entity_count: u8,
     /// HID++ DeviceInformation serial number, when the device supports the
@@ -107,7 +107,7 @@ impl DeviceModelInfo {
     clippy::struct_excessive_bools,
     reason = "bitfield mirroring HID++ DeviceInformation; transports are independent flags"
 )]
-#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct DeviceTransports {
     pub usb: bool,
     pub equad: bool,
@@ -115,7 +115,7 @@ pub struct DeviceTransports {
     pub bluetooth: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairedDevice {
     /// Receiver-assigned slot (1..=6 for Bolt).
     pub slot: u8,
@@ -130,7 +130,7 @@ pub struct PairedDevice {
     pub model_info: Option<DeviceModelInfo>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInventory {
     pub receiver: ReceiverInfo,
     pub paired: Vec<PairedDevice>,
