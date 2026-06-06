@@ -6,9 +6,9 @@
 //! and cancel into it — and streams [`PairingEvent`]s back to the GPUI thread.
 //! When the session ends it returns to idle, ready for the next open.
 //!
-//! Keeping the thread long-lived means the GPUI [`crate::main`] select loop can
-//! own one fixed `PairingEvent` receiver and one [`Control`] sender (published
-//! as a global), instead of wiring a fresh channel on every window open.
+//! Keeping the thread long-lived means the consumer's select loop can own one
+//! fixed `PairingEvent` receiver and one [`Control`] sender (published as a
+//! global), instead of wiring a fresh channel on every window open.
 
 use std::thread;
 

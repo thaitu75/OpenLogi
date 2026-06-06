@@ -10,5 +10,6 @@ pub mod bindings;
 mod dpi;
 pub mod hardware;
 pub mod hook_runtime;
+pub mod watchers;
 
 pub use dpi::DpiCycleState;

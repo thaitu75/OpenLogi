@@ -1,6 +1,7 @@
 //! The "Add device" window — drives a wireless pairing session.
 //!
-//! Pairing runs on the long-lived [`crate::watchers::pairing`] thread. This
+//! Pairing runs on the long-lived [`openlogi_agent_core::watchers::pairing`]
+//! thread. This
 //! window is a thin state machine over two globals:
 //!
 //! - [`PairingControl`] — the channel the buttons push [`Control`] into
@@ -22,8 +23,8 @@ use gpui_component::v_flex;
 use openlogi_hid::{Click, DiscoveredDevice, PairingEvent, PasskeyMethod, ReceiverSelector};
 
 use crate::theme::{self, Palette};
-use crate::watchers::pairing::Control;
 use crate::windows::{self, AuxWindow};
+use openlogi_agent_core::watchers::pairing::Control;
 
 /// Sender side of the pairing watcher, published as a global so the window's
 /// buttons can drive the session without threading a handle through the views.

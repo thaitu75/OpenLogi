@@ -33,7 +33,6 @@ mod mouse_model;
 mod platform;
 mod state;
 mod theme;
-mod watchers;
 mod windows;
 
 // Loads `crates/openlogi-gui/locales/*.yml` at compile time and generates the
@@ -60,6 +59,7 @@ use tracing_subscriber::EnvFilter;
 use crate::app::AppView;
 use crate::state::{AppState, DpiCycleState};
 use openlogi_agent_core::hook_runtime::{self, BindingMap};
+use openlogi_agent_core::watchers;
 
 #[allow(
     clippy::too_many_lines,
