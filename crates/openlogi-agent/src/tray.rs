@@ -69,9 +69,16 @@ fn launch_gui() {
 }
 
 /// Run the agent's AppKit main loop: an `Accessory` `NSApplication` (no Dock
-/// icon) hosting the menu-bar status item. Must be called on the process's main
-/// thread; blocks for the agent's lifetime (the agent exits via Quit).
-pub fn run_app_loop() -> ! {
+/// icon) optionally hosting the menu-bar status item. Must be called on the
+/// process's main thread; blocks for the agent's lifetime (the agent exits via
+/// Quit).
+///
+/// `show_in_menu_bar` honors the user's preference: when `false`, the same
+/// Accessory loop runs with no status item (the agent stays fully headless; the
+/// tokio core still does all the work). The toggle takes effect on the agent's
+/// next launch — a no-restart live toggle would need a main-thread hop from the
+/// IPC reload path (deferred; it can't be verified headlessly).
+pub fn run_app_loop(show_in_menu_bar: bool) -> ! {
     let Some(mtm) = MainThreadMarker::new() else {
         warn!("agent AppKit loop not started off the main thread — exiting");
         std::process::exit(1);
@@ -79,6 +86,25 @@ pub fn run_app_loop() -> ! {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
+    // Bind the status item (+ its target/menu) so they outlive `run()` — the
+    // menu items only weakly reference the target. `None` when hidden.
+    let _tray = show_in_menu_bar.then(|| install_status_item(mtm));
+    info!(show_in_menu_bar, "agent AppKit loop started");
+
+    app.run();
+    std::process::exit(0);
+}
+
+/// Build and install the menu-bar status item, returning the objects that must
+/// stay alive for the app's lifetime (the status item, the action target the
+/// menu items weakly reference, and the menu itself).
+fn install_status_item(
+    mtm: MainThreadMarker,
+) -> (
+    Retained<objc2_app_kit::NSStatusItem>,
+    Retained<MenuTarget>,
+    Retained<objc2_app_kit::NSMenu>,
+) {
     let target = MenuTarget::new(mtm);
     let status_item = status_item::create_status_item();
     status_item::set_symbol_icon(
@@ -97,8 +123,5 @@ pub fn run_app_loop() -> ! {
     status_item.setMenu(Some(&menu));
 
     info!("menu-bar item installed");
-    // The locals above (incl. `target`, weakly referenced by the menu items)
-    // stay alive across `run()`, which blocks until the app terminates.
-    app.run();
-    std::process::exit(0);
+    (status_item, target, menu)
 }

@@ -69,6 +69,9 @@ fn main() {
     // runs AppKit. Elsewhere there is no tray, so just block on the core.
     #[cfg(target_os = "macos")]
     {
+        // Read the menu-bar preference before `config` moves into the core
+        // thread; the main thread hosts the tray.
+        let show_in_menu_bar = config.app_settings.show_in_menu_bar;
         if let Err(e) = std::thread::Builder::new()
             .name("openlogi-agent-core".into())
             .spawn(move || runtime.block_on(run(config)))
@@ -76,7 +79,7 @@ fn main() {
             warn!(error = %e, "could not spawn the agent core thread; exiting");
             return;
         }
-        tray::run_app_loop();
+        tray::run_app_loop(show_in_menu_bar);
     }
     #[cfg(not(target_os = "macos"))]
     runtime.block_on(run(config));

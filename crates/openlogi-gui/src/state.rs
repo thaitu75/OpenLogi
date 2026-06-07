@@ -848,10 +848,12 @@ impl AppState {
         self.send_ipc(crate::ipc_client::Command::ReloadConfig);
     }
 
-    /// Toggle the menu-bar (status item) icon and persist it. The icon is
-    /// hosted by the always-on agent now, so this saves the preference and asks
-    /// the agent to apply it (show / hide its `NSStatusItem`). No-op when
-    /// unchanged.
+    /// Toggle the menu-bar (status item) icon preference and persist it. The
+    /// icon is hosted by the always-on agent, which reads this on startup and
+    /// installs the status item only when enabled — so the change takes effect
+    /// the next time the agent launches (a no-restart live toggle would need a
+    /// main-thread hop from the agent's IPC reload). `ReloadConfig` keeps the
+    /// agent's other config in sync meanwhile. No-op when unchanged.
     pub fn set_show_in_menu_bar(&mut self, enabled: bool) {
         if self.config.app_settings.show_in_menu_bar == enabled {
             return;
