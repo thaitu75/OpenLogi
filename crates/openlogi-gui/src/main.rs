@@ -67,9 +67,9 @@ use openlogi_agent_core::watchers;
 fn main() -> Result<()> {
     init_tracing();
 
-    let _guard = match platform::single_instance::acquire() {
+    let _guard = match openlogi_core::single_instance::acquire("openlogi.lock") {
         Ok(g) => g,
-        Err(platform::single_instance::InstanceError::AlreadyRunning { path }) => {
+        Err(openlogi_core::single_instance::InstanceError::AlreadyRunning { path }) => {
             info!(
                 path = %path.display(),
                 "another OpenLogi instance is already running — exiting"

@@ -118,8 +118,9 @@ impl Agent for AgentServer {
 }
 
 /// Bind the agent's Unix socket and serve [`Agent`] requests until the process
-/// exits. A stale socket left by a prior crash is removed first — the agent
-/// holds the single-instance lock, so any existing socket is dead.
+/// exits. A stale socket left by a prior crash is removed first — `main` holds
+/// the single-instance lock (`agent.lock`), so no other live agent owns this
+/// socket and any leftover file is from a dead instance.
 pub async fn run(server: AgentServer, socket_path: PathBuf) {
     if let Some(parent) = socket_path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)

@@ -30,6 +30,23 @@ use crate::server::AgentServer;
 fn main() {
     init_tracing();
 
+    // Single-instance guard: the agent owns all device I/O, the CGEventTap, and
+    // the IPC socket, so a second agent must never start — launchd's KeepAlive
+    // racing the GUI's one-shot auto-spawn could otherwise bring up two, and the
+    // loser would steal the socket and install a duplicate event tap. Held for
+    // the whole process; the OS releases it on exit (crash-recovery is free).
+    let _guard = match openlogi_core::single_instance::acquire("agent.lock") {
+        Ok(g) => g,
+        Err(openlogi_core::single_instance::InstanceError::AlreadyRunning { path }) => {
+            info!(path = %path.display(), "another openlogi-agent is already running — exiting");
+            return;
+        }
+        Err(e) => {
+            warn!(error = %e, "single-instance check failed — exiting");
+            return;
+        }
+    };
+
     let config = Config::load_or_default().unwrap_or_else(|e| {
         warn!(error = %e, "could not load config.toml; using defaults");
         Config::default()

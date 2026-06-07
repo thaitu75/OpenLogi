@@ -4701,6 +4701,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.25.0",
  "evdev",
+ "fs4",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
@@ -4715,7 +4716,6 @@ name = "openlogi-gui"
 version = "0.5.3"
 dependencies = [
  "anyhow",
- "fs4",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
