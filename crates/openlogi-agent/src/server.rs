@@ -14,7 +14,7 @@ use openlogi_agent_core::ipc::{Agent, AgentStatus, PROTOCOL_VERSION};
 use openlogi_agent_core::orchestrator::{Orchestrator, SharedRuntime};
 use openlogi_core::config::{Config, Lighting};
 use openlogi_core::device::DeviceInventory;
-use openlogi_hid::{DeviceRoute, DpiInfo, SmartShiftMode, SmartShiftStatus};
+use openlogi_hid::{DeviceRoute, DpiInfo, SmartShiftMode, SmartShiftStatus, WriteError};
 use openlogi_hook::Hook;
 use tarpc::context::Context;
 use tarpc::server::{BaseChannel, Channel as _};
@@ -62,10 +62,8 @@ impl Agent for AgentServer {
         }
     }
 
-    async fn set_dpi(self, _: Context, route: DeviceRoute, dpi: u32) -> Result<(), String> {
-        hardware::apply_dpi(&self.shared.capture_channel, &route, dpi)
-            .await
-            .map_err(|e| e.to_string())
+    async fn set_dpi(self, _: Context, route: DeviceRoute, dpi: u32) -> Result<(), WriteError> {
+        hardware::apply_dpi(&self.shared.capture_channel, &route, dpi).await
     }
 
     async fn set_lighting(
@@ -73,10 +71,8 @@ impl Agent for AgentServer {
         _: Context,
         route: DeviceRoute,
         lighting: Lighting,
-    ) -> Result<(), String> {
-        hardware::apply_lighting(&route, &lighting)
-            .await
-            .map_err(|e| e.to_string())
+    ) -> Result<(), WriteError> {
+        hardware::apply_lighting(&route, &lighting).await
     }
 
     async fn set_smartshift(
@@ -86,7 +82,7 @@ impl Agent for AgentServer {
         mode: SmartShiftMode,
         auto_disengage: u8,
         tunable_torque: u8,
-    ) -> Result<(), String> {
+    ) -> Result<(), WriteError> {
         hardware::apply_smartshift(
             &self.shared.capture_channel,
             &route,
@@ -95,21 +91,18 @@ impl Agent for AgentServer {
             tunable_torque,
         )
         .await
-        .map_err(|e| e.to_string())
     }
 
-    async fn read_dpi(self, _: Context, route: DeviceRoute) -> Result<DpiInfo, String> {
-        hardware::read_dpi(&route).await.map_err(|e| e.to_string())
+    async fn read_dpi(self, _: Context, route: DeviceRoute) -> Result<DpiInfo, WriteError> {
+        hardware::read_dpi(&route).await
     }
 
     async fn read_smartshift(
         self,
         _: Context,
         route: DeviceRoute,
-    ) -> Result<SmartShiftStatus, String> {
-        hardware::read_smartshift(&route)
-            .await
-            .map_err(|e| e.to_string())
+    ) -> Result<SmartShiftStatus, WriteError> {
+        hardware::read_smartshift(&route).await
     }
 
     async fn request_accessibility_prompt(self, _: Context) {

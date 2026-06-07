@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use openlogi_agent_core::ipc::{AgentClient, AgentStatus};
 use openlogi_core::config::Lighting;
 use openlogi_core::device::DeviceInventory;
-use openlogi_hid::{DeviceRoute, DpiInfo, SmartShiftMode, SmartShiftStatus};
+use openlogi_hid::{DeviceRoute, DpiInfo, SmartShiftMode, SmartShiftStatus, WriteError};
 use tarpc::client;
 use tarpc::context;
 use tarpc::tokio_serde::formats::Bincode;
@@ -41,10 +41,10 @@ pub enum Command {
     SetDpi(DeviceRoute, u32),
     SetLighting(DeviceRoute, Lighting),
     SetSmartShift(DeviceRoute, SmartShiftMode, u8, u8),
-    ReadDpi(DeviceRoute, oneshot::Sender<Result<DpiInfo, String>>),
+    ReadDpi(DeviceRoute, oneshot::Sender<Result<DpiInfo, WriteError>>),
     ReadSmartShift(
         DeviceRoute,
-        oneshot::Sender<Result<SmartShiftStatus, String>>,
+        oneshot::Sender<Result<SmartShiftStatus, WriteError>>,
     ),
     ReloadConfig,
     /// Ask the agent to fire the macOS Accessibility prompt. The agent owns the
@@ -224,7 +224,7 @@ async fn handle(client: &mut Option<AgentClient>, cmd: Command) -> Result<(), ()
 
 /// A fire-and-forget "apply now": `Err(())` (transport drop) propagates so the
 /// caller reconnects; a device-side failure is logged, not surfaced.
-fn log_apply(r: Result<Result<(), String>, tarpc::client::RpcError>) -> Result<(), ()> {
+fn log_apply(r: Result<Result<(), WriteError>, tarpc::client::RpcError>) -> Result<(), ()> {
     match r {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => {
@@ -248,13 +248,15 @@ fn rpc_result<T>(r: Result<T, tarpc::client::RpcError>) -> Result<T, ()> {
     reason = "the two read arms send the same disconnect error to differently-typed reply channels, so they can't be merged"
 )]
 fn reply_disconnected(cmd: Command) {
-    const MSG: &str = "background agent not running";
+    // Transient (Hidpp), not a permanent feature error: the agent is just
+    // restarting, so the panel should keep retrying, not latch "unsupported".
+    let unreachable = || WriteError::Hidpp("background agent not running".to_string());
     match cmd {
         Command::ReadDpi(_, reply) => {
-            let _ = reply.send(Err(MSG.to_string()));
+            let _ = reply.send(Err(unreachable()));
         }
         Command::ReadSmartShift(_, reply) => {
-            let _ = reply.send(Err(MSG.to_string()));
+            let _ = reply.send(Err(unreachable()));
         }
         _ => {}
     }

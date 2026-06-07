@@ -8,7 +8,7 @@
 
 use openlogi_core::config::Lighting;
 use openlogi_core::device::DeviceInventory;
-use openlogi_hid::{DeviceRoute, DpiInfo, SmartShiftMode, SmartShiftStatus};
+use openlogi_hid::{DeviceRoute, DpiInfo, SmartShiftMode, SmartShiftStatus, WriteError};
 use serde::{Deserialize, Serialize};
 
 /// Wire-protocol version. Bumped only on a breaking change to the types below —
@@ -41,20 +41,22 @@ pub trait Agent {
     /// the GUI after it saves a config change.
     async fn reload_config();
     /// Apply a DPI value to `route` now (slider preview / commit).
-    async fn set_dpi(route: DeviceRoute, dpi: u32) -> Result<(), String>;
+    async fn set_dpi(route: DeviceRoute, dpi: u32) -> Result<(), WriteError>;
     /// Apply a lighting config to `route` now.
-    async fn set_lighting(route: DeviceRoute, lighting: Lighting) -> Result<(), String>;
+    async fn set_lighting(route: DeviceRoute, lighting: Lighting) -> Result<(), WriteError>;
     /// Apply a full SmartShift config to `route` now.
     async fn set_smartshift(
         route: DeviceRoute,
         mode: SmartShiftMode,
         auto_disengage: u8,
         tunable_torque: u8,
-    ) -> Result<(), String>;
-    /// Read the current DPI + supported values from `route`.
-    async fn read_dpi(route: DeviceRoute) -> Result<DpiInfo, String>;
+    ) -> Result<(), WriteError>;
+    /// Read the current DPI + supported values from `route`. A permanent error
+    /// (`FeatureUnsupported` / `EmptyDpiList`) reaches the GUI intact so it can
+    /// stop re-probing a device that genuinely lacks the feature.
+    async fn read_dpi(route: DeviceRoute) -> Result<DpiInfo, WriteError>;
     /// Read the current SmartShift config from `route`.
-    async fn read_smartshift(route: DeviceRoute) -> Result<SmartShiftStatus, String>;
+    async fn read_smartshift(route: DeviceRoute) -> Result<SmartShiftStatus, WriteError>;
     /// Prompt for Accessibility from the agent, so the system dialog names the
     /// agent — the actually-trusted binary — rather than the GUI.
     async fn request_accessibility_prompt();

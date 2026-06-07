@@ -101,8 +101,10 @@ impl SmartShiftPanel {
         };
 
         cx.update_global::<AppState, _>(|state, _| state.mark_smartshift_loading(&key));
-        // Read through the agent over IPC (it owns device I/O); wrap the error
-        // so the panel's existing retry/cache logic still applies.
+        // Read through the agent over IPC (it owns device I/O). The agent returns
+        // the typed `WriteError`, so a permanent `FeatureUnsupported` reaches
+        // `store_smartshift_status` intact and the panel stops re-probing a
+        // device that lacks the feature instead of retrying every reselect.
         let sender = cx.global::<AppState>().ipc_sender();
         let (tx, rx) = tokio::sync::oneshot::channel();
         if sender
@@ -117,7 +119,6 @@ impl SmartShiftPanel {
         }
         cx.spawn(async move |_panel, cx| match rx.await {
             Ok(result) => {
-                let result = result.map_err(openlogi_hid::WriteError::Hidpp);
                 cx.update_global::<AppState, _>(|state, cx| {
                     state.store_smartshift_status(key, &route, result);
                     cx.refresh_windows();

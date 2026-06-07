@@ -26,10 +26,17 @@ use tracing::debug;
 use crate::route::{DeviceRoute, open_route_channel};
 use crate::smartshift::{SmartShiftFeatureV0, SmartShiftMode, SmartShiftStatus};
 
-#[derive(Debug, Error)]
+// Serializable + Clone so it can cross the agent↔GUI IPC unchanged: the GUI
+// classifies a device read/write error as permanent (FeatureUnsupported /
+// EmptyDpiList) vs transient, so the discriminating variant must survive the
+// wire — stringifying it would collapse every case to "transient" and a device
+// that genuinely lacks a feature would be re-probed forever.
+#[derive(Debug, Clone, Error, Serialize, Deserialize)]
 pub enum WriteError {
-    #[error("HID transport error")]
-    Hid(#[from] async_hid::HidError),
+    // `async_hid::HidError` isn't `Serialize`, so carry its message as text; the
+    // typed error is never matched on (only constructed + displayed).
+    #[error("HID transport error: {0}")]
+    Hid(String),
     #[error("no connected device matched the route")]
     DeviceNotFound,
     #[error("device at index {index:#04x} did not respond to HID++")]
@@ -40,6 +47,12 @@ pub enum WriteError {
     EmptyDpiList,
     #[error("HID++ protocol error: {0}")]
     Hidpp(String),
+}
+
+impl From<async_hid::HidError> for WriteError {
+    fn from(e: async_hid::HidError) -> Self {
+        Self::Hid(e.to_string())
+    }
 }
 
 /// Supported DPI values reported by a device's HID++ AdjustableDpi feature.
@@ -526,7 +539,7 @@ pub async fn set_keyboard_color(
         writer
             .write_output_report(&rep)
             .await
-            .map_err(WriteError::Hid)?;
+            .map_err(WriteError::from)?;
     }
     let mut commit = vec![0u8; 20];
     commit[0] = 0x11;
@@ -536,7 +549,7 @@ pub async fn set_keyboard_color(
     writer
         .write_output_report(&commit)
         .await
-        .map_err(WriteError::Hid)?;
+        .map_err(WriteError::from)?;
     debug!(
         device_index,
         feature_index, r, g, b, "wrote keyboard colour"

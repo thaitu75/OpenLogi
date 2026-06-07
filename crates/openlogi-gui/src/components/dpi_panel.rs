@@ -83,9 +83,10 @@ impl DpiPanel {
 
         cx.update_global::<AppState, _>(|state, _| state.mark_dpi_loading(&key));
         // The agent owns device I/O; request the DPI read over IPC and await the
-        // reply rather than opening the device from the GUI process. The error
-        // is wrapped as a transient `WriteError` so the panel's retry-to-cap
-        // logic still applies (the agent already stringified the real cause).
+        // reply rather than opening the device from the GUI process. The agent
+        // returns the typed `WriteError`, so a permanent `FeatureUnsupported` /
+        // `EmptyDpiList` reaches `store_dpi_info` intact and the panel stops
+        // re-probing instead of retrying a doomed read on every reselect.
         let sender = cx.global::<AppState>().ipc_sender();
         let (tx, rx) = tokio::sync::oneshot::channel();
         if sender
@@ -98,7 +99,6 @@ impl DpiPanel {
         cx.spawn(async move |_panel, cx| {
             match rx.await {
                 Ok(result) => {
-                    let result = result.map_err(openlogi_hid::WriteError::Hidpp);
                     cx.update_global::<AppState, _>(|state, cx| {
                         state.store_dpi_info(key, &route, result);
                         cx.refresh_windows();
