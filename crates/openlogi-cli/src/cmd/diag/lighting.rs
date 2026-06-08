@@ -12,6 +12,11 @@ use openlogi_hid::DeviceRoute;
 pub struct LightingArgs {
     /// Colour as `RRGGBB` hex (e.g. `ff0000` for red).
     pub color: String,
+
+    /// Run against the wired device whose name contains this string
+    /// (case-insensitive). Useful when several keyboards are connected.
+    #[arg(long, value_name = "NAME")]
+    pub device: Option<String>,
 }
 
 pub async fn run(args: LightingArgs) -> Result<()> {
@@ -25,6 +30,9 @@ pub async fn run(args: LightingArgs) -> Result<()> {
     let g = ((rgb >> 8) & 0xff) as u8;
     let b = (rgb & 0xff) as u8;
 
+    let device_query = args.device;
+    let needle = device_query.as_deref().map(str::to_lowercase);
+
     let inventories = openlogi_hid::enumerate().await?;
     let (route, name) = inventories
         .iter()
@@ -35,20 +43,28 @@ pub async fn run(args: LightingArgs) -> Result<()> {
                 return None;
             }
             let paired = inv.paired.iter().find(|p| p.online)?;
-            let route = DeviceRoute::Direct {
-                vendor_id: inv.receiver.vendor_id,
-                product_id: inv.receiver.product_id,
-            };
             let name = paired.codename.clone().unwrap_or_else(|| {
                 format!(
                     "{:04x}:{:04x}",
                     inv.receiver.vendor_id, inv.receiver.product_id
                 )
             });
+            if let Some(ref n) = needle {
+                if !name.to_lowercase().contains(n.as_str()) {
+                    return None;
+                }
+            }
+            let route = DeviceRoute::Direct {
+                vendor_id: inv.receiver.vendor_id,
+                product_id: inv.receiver.product_id,
+            };
             Some((route, name))
         })
-        .ok_or_else(|| {
-            anyhow!("no wired (direct-USB) Logitech device found — is the keyboard plugged in?")
+        .ok_or_else(|| match &device_query {
+            Some(q) => anyhow!("no wired device matches `--device {q}`"),
+            None => {
+                anyhow!("no wired (direct-USB) Logitech device found — is the keyboard plugged in?")
+            }
         })?;
 
     println!("setting {name} ({route}) to #{r:02x}{g:02x}{b:02x}");
