@@ -34,5 +34,9 @@ objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", features = ["NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSResponder", "NSView", "NSMenu", "NSMenuItem", "NSImage", "NSApplication", "NSRunningApplication"] }
 objc2-foundation = { version = "0.3.2", features = ["NSString", "NSData", "NSArray"] }
 
+# Autostart via the HKCU Run key (launch_agent.rs).
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.55"
+
 [lints]
 workspace = true
