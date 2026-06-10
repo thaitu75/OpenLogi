@@ -372,6 +372,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The token-minting action below is a local action, so the repo must be
+      # on disk before it can run.
+      - uses: actions/checkout@v6
+
       - name: Mint homebrew-tap token (GitHub App)
         id: tap_token
         uses: ./.github/actions/github-app-token-from-1password
