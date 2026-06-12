@@ -107,6 +107,16 @@ impl AssetResolver {
         self.has_bundle
     }
 
+    /// `true` when the asset index loaded; `false` means devices show the silhouette.
+    pub fn index_loaded(&self) -> bool {
+        self.index.is_some()
+    }
+
+    /// Number of device models in the loaded index, or `None` if no index loaded.
+    pub fn index_entry_count(&self) -> Option<usize> {
+        self.index.as_ref().map(|index| index.devices.len())
+    }
+
     pub fn resolve(
         &self,
         model: &DeviceModelInfo,

@@ -10,6 +10,9 @@ body:
         **device, connection, and version details are essential** — issues without
         them are usually impossible to reproduce.
 
+        GUI users: open the **About** window and click **Copy Diagnostics** — it
+        captures most of what's asked below in one privacy-filtered paste.
+
   - type: checkboxes
     id: preflight
     attributes:
@@ -118,6 +121,15 @@ body:
         3. ...
     validations:
       required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics report
+      description: |
+        In the GUI, open the **About** window and click **Copy Diagnostics**, then paste here.
+        It captures versions, OS, connection, capabilities, render state, and asset-cache state — and is privacy-filtered (no serial numbers or unit IDs). The fastest way to give us everything we need.
+      render: markdown
 
   - type: textarea
     id: device-list

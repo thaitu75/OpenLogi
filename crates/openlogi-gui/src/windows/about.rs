@@ -6,8 +6,9 @@
 //! `img()` resolves it the same inside a packaged `.app` as in a dev build.
 
 use gpui::{
-    App, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement as _, Render,
-    Size, StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, img, px,
+    App, ClipboardItem, Context, Entity, FontWeight, InteractiveElement, IntoElement,
+    ParentElement as _, Render, Size, StatefulInteractiveElement as _, Styled as _, Subscription,
+    Window, div, img, px,
 };
 use gpui_component::{IconName, button::Button, h_flex, v_flex};
 use gpui_updater::{UpdateStatus, Updater};
@@ -25,6 +26,10 @@ pub struct AboutView {
     updater: Entity<Updater>,
     #[allow(dead_code, reason = "held to keep the updater observation alive")]
     updater_obs: Subscription,
+    /// `true` for ~2s after a diagnostics copy, so the button can flip its label to a confirmation.
+    copied: bool,
+    /// Bumped on each copy so a stale reset timer can't clear a newer confirmation.
+    copied_gen: u64,
 }
 
 impl AboutView {
@@ -41,7 +46,43 @@ impl AboutView {
             appearance_obs: None,
             updater,
             updater_obs,
+            copied: false,
+            copied_gen: 0,
         }
+    }
+
+    /// A "Copy Diagnostics" button that puts a privacy-filtered report on the clipboard, then confirms for ~2s.
+    fn diagnostics_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let label = if self.copied {
+            tr!("Copied!")
+        } else {
+            tr!("Copy Diagnostics")
+        };
+        Button::new("about-copy-diagnostics")
+            .outline()
+            .icon(IconName::Copy)
+            .label(label)
+            .on_click(cx.listener(|this, _, _, cx| {
+                let report = crate::diagnostics::collect(cx).to_markdown();
+                cx.write_to_clipboard(ClipboardItem::new_string(report));
+                this.copied = true;
+                this.copied_gen = this.copied_gen.wrapping_add(1);
+                let generation = this.copied_gen;
+                cx.notify();
+                cx.spawn(async move |view, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(2))
+                        .await;
+                    view.update(cx, |view, cx| {
+                        if view.copied_gen == generation {
+                            view.copied = false;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+            }))
     }
 
     /// The "Check for Updates" control plus a one-line status message and a
@@ -196,6 +237,7 @@ impl Render for AboutView {
                     ),
             )
             .child(self.update_section(cx))
+            .child(self.diagnostics_button(cx))
             .child(
                 div()
                     .text_xs()

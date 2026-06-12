@@ -59,6 +59,8 @@ _version: 1
 "About OpenLogi": "OpenLogi について"
 "Settings…": "設定…"
 "Check for Updates…": "アップデートを確認…"
+"Copy Diagnostics": "診断情報をコピー"
+"Copied!": "コピーしました！"
 "Edit": "編集"
 "Undo": "取り消す"
 "Redo": "やり直す"

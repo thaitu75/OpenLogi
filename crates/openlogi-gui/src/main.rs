@@ -35,6 +35,7 @@ mod app_menu;
 mod asset;
 mod components;
 mod data;
+mod diagnostics;
 mod i18n;
 mod ipc_client;
 mod mouse_model;
@@ -302,6 +303,7 @@ fn main() -> Result<()> {
                                 let merged = update.status.inventory
                                     == openlogi_agent_core::ipc::InventoryHealth::Ready
                                     && state.refresh_inventories(&update.inventory, &cache, force_refresh);
+                                state.store_agent_snapshot(&update.inventory, &update.status);
                                 // Bitwise `|`: the link must be set even when the
                                 // merge already reported a change.
                                 merged | state.set_agent_link(state::AgentLink::Ready(update.status))

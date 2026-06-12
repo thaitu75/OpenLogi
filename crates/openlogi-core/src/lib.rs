@@ -8,5 +8,6 @@ pub mod binding;
 pub mod brand;
 pub mod config;
 pub mod device;
+pub mod diagnostics;
 pub mod paths;
 pub mod single_instance;
