@@ -25,6 +25,10 @@ use hidpp::{
             DeviceConnection as BoltDeviceConnection, DeviceKind as BoltDeviceKind,
             Event as BoltEvent, Receiver as BoltReceiver,
         },
+        unifying::{
+            DeviceConnection as UnifyingDeviceConnection, DeviceKind as UnifyingDeviceKind,
+            Event as UnifyingEvent, Receiver as UnifyingReceiver,
+        },
     },
 };
 use openlogi_core::device::{
@@ -60,6 +64,18 @@ const MAX_BOLT_SLOTS: u8 = 6;
 /// trip it.
 const PROBE_BUDGET: Duration = Duration::from_secs(5);
 
+/// Per-slot budget for the HID++ 2.0 feature walk on a Unifying paired device.
+///
+/// Unifying wireless round-trips are slower than Bolt BTLE: some devices (e.g.
+/// K540) take ~3 s for the version ping to return. Running multiple slow slots
+/// concurrently can still consume the full PROBE_BUDGET and get cancelled
+/// mid-walk — the probe returns nothing rather than partial features.  A
+/// per-slot cap ensures each slot's feature walk is bounded independently of
+/// how many other slots are being probed at the same time.  A timed-out slot
+/// still surfaces in the inventory (kind + wpid from the arrival event) — it
+/// just lacks capabilities / battery until the next tick.
+const UNIFYING_SLOT_PROBE: Duration = Duration::from_millis(3500);
+
 #[derive(Debug, Error)]
 pub enum InventoryError {
     #[error("HID transport error")]
@@ -83,6 +99,11 @@ const REFRESH_TICKS: u64 = 15;
 enum CacheKey {
     /// Bolt: the unit id from the pairing register (cheap, read every tick).
     Bolt { unit_id: [u8; 4] },
+    /// Unifying: keyed on the full receiver serial number + pairing slot.
+    /// Using the complete serial (not just a prefix) avoids collisions between
+    /// two receivers whose serials share a common prefix (e.g. "DA2699E1" and
+    /// "DA2604F2" share "DA2").
+    UnifyingSlot { receiver_uid: String, slot: u8 },
     /// Direct (Bluetooth/USB): the OS-assigned HID node id (macOS registry-entry
     /// id, Linux dev path, Windows interface path). Unique *per node*, so two
     /// units of the same model never collide, and stable while connected so the
@@ -298,9 +319,12 @@ impl Enumerator {
         let mut outcomes = Vec::new();
         for result in results {
             match result {
-                Ok((inv, mut probed)) => {
+                Ok(Ok((inv, mut probed))) => {
                     inventories.extend(inv);
                     outcomes.append(&mut probed);
+                }
+                Ok(Err(e)) => {
+                    warn!(error = ?e, "device probe failed — skipping");
                 }
                 Err(_) => {
                     warn!(budget = ?PROBE_BUDGET, "device probe timed out — skipping (asleep/unresponsive)");
@@ -357,16 +381,30 @@ async fn probe_one(
     channel: Arc<HidppChannel>,
     cache: &HashMap<CacheKey, Cached>,
     tick: u64,
-) -> (Option<DeviceInventory>, Vec<CacheOutcome>) {
-    let Some(Receiver::Bolt(bolt)) = receiver::detect(Arc::clone(&channel)) else {
-        // No receiver detected — this might be a directly-paired device
-        // (Bluetooth-direct, USB-C cable). HID++ at device-index 0xff
-        // addresses the device's own features. Probe in case it answers.
-        // P2.4 — verified path; no Bolt-pairing slot indirection needed.
-        let (inventory, outcome) = probe_direct(channel, &info, cache, tick).await;
-        return (inventory, vec![outcome]);
-    };
+) -> Result<(Option<DeviceInventory>, Vec<CacheOutcome>), InventoryError> {
+    match receiver::detect(Arc::clone(&channel)) {
+        Some(Receiver::Bolt(bolt)) => probe_bolt_receiver(channel, info, bolt, cache, tick).await,
+        Some(Receiver::Unifying(unifying)) => {
+            probe_unifying_receiver(channel, info, unifying, cache, tick).await
+        }
+        None | Some(_) => {
+            // No recognised receiver — this might be a directly-paired device
+            // (Bluetooth-direct, USB-C cable). HID++ at device-index 0xff
+            // addresses the device's own features. Probe in case it answers.
+            // P2.4 — verified path; no Bolt-pairing slot indirection needed.
+            let (inventory, outcome) = probe_direct(channel, &info, cache, tick).await;
+            Ok((inventory, vec![outcome]))
+        }
+    }
+}
 
+async fn probe_bolt_receiver(
+    channel: Arc<HidppChannel>,
+    info: async_hid::DeviceInfo,
+    bolt: BoltReceiver,
+    cache: &HashMap<CacheKey, Cached>,
+    tick: u64,
+) -> Result<(Option<DeviceInventory>, Vec<CacheOutcome>), InventoryError> {
     let unique_id = bolt.get_unique_id().await.ok();
     let pairing_count = bolt.count_pairings().await.ok();
     debug!(?pairing_count, "receiver reports pairing count");
@@ -397,7 +435,7 @@ async fn probe_one(
         );
     }
 
-    (
+    Ok((
         Some(DeviceInventory {
             receiver: ReceiverInfo {
                 name: "Logi Bolt Receiver".to_string(),
@@ -408,7 +446,78 @@ async fn probe_one(
             paired,
         }),
         outcomes,
-    )
+    ))
+}
+
+async fn probe_unifying_receiver(
+    channel: Arc<HidppChannel>,
+    info: async_hid::DeviceInfo,
+    unifying: UnifyingReceiver,
+    cache: &HashMap<CacheKey, Cached>,
+    tick: u64,
+) -> Result<(Option<DeviceInventory>, Vec<CacheOutcome>), InventoryError> {
+    let unique_id = unifying.get_unique_id().await.ok();
+    let pairing_count = unifying.count_pairings().await.ok();
+    debug!(?pairing_count, "receiver reports pairing count");
+
+    // Trigger device-arrival events and collect one event per online device.
+    // Each event carries the slot index, kind, wpid, and online flag — enough
+    // to build a PairedDevice entry for every currently-connected device.
+    //
+    // Note: the Unifying `0xB5/0x5N` pairing-info register uses a different
+    // sub-register base than Bolt, so we don't yet poll offline paired slots.
+    // Online devices are covered by the arrival drain; offline device support
+    // requires resolving the correct sub-register format.
+    let connections = drain_device_arrival_unifying(&unifying).await;
+    debug!(events = connections.len(), "drained device-arrival events");
+
+    // Probe all online slots concurrently so a slow HID++ 2.0 feature walk on
+    // one device doesn't push the next slot past the PROBE_BUDGET deadline.
+    // Pass the receiver UID so each slot's cache key is scoped to this specific
+    // receiver — two Unifying receivers sharing a slot number must not share a
+    // cache entry (different devices, different capabilities).
+    let receiver_uid_fallback;
+    let receiver_uid = if let Some(uid) = unique_id.as_deref() {
+        uid
+    } else {
+        // UID fetch failed — use the product ID as a weaker discriminant so
+        // two receivers with the same PID still collide, but a receiver and a
+        // direct device never share a cache entry.
+        tracing::warn!("Unifying receiver UID unavailable; cache isolation may be degraded");
+        receiver_uid_fallback = format!("pid:{:04x}", info.product_id);
+        &receiver_uid_fallback
+    };
+    let slot_results = connections
+        .iter()
+        .map(|conn| probe_unifying_slot(&channel, conn, receiver_uid, cache, tick))
+        .collect::<Vec<_>>()
+        .join()
+        .await;
+
+    let (paired, outcomes): (Vec<_>, Vec<_>) = slot_results.into_iter().flatten().unzip();
+
+    if let Some(count) = pairing_count
+        && paired.len() != usize::from(count)
+    {
+        debug!(
+            expected = count,
+            found = paired.len(),
+            "online devices differ from pairing count; offline devices not yet surfaced for Unifying"
+        );
+    }
+
+    Ok((
+        Some(DeviceInventory {
+            receiver: ReceiverInfo {
+                name: "Unifying Receiver".to_string(),
+                vendor_id: info.vendor_id,
+                product_id: info.product_id,
+                unique_id,
+            },
+            paired,
+        }),
+        outcomes,
+    ))
 }
 
 /// Probe a single Bolt pairing slot. Returns `None` when the slot is empty or
@@ -572,6 +681,88 @@ async fn drain_device_arrival(bolt: &BoltReceiver) -> Vec<BoltDeviceConnection> 
         }
     }
     out
+}
+
+async fn drain_device_arrival_unifying(
+    unifying: &UnifyingReceiver,
+) -> Vec<UnifyingDeviceConnection> {
+    let rx = unifying.listen();
+    if let Err(e) = unifying.trigger_device_arrival().await {
+        debug!(error = ?e, "trigger_device_arrival failed; receiver may report no devices");
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    loop {
+        match timeout(ARRIVAL_DRAIN, rx.recv()).await {
+            Ok(Ok(UnifyingEvent::DeviceConnection(c))) => out.push(c),
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    out
+}
+
+/// Probe a Unifying slot from a live device-connection event.
+///
+/// Device-arrival events carry the slot index, kind, wpid, and online status —
+/// enough to surface an entry for every currently-connected device. The
+/// unit_id (needed for stable caching across ticks) is not available without a
+/// working `get_device_pairing_information` call; we derive a stable cache key
+/// from the receiver UID + slot so the feature-table walk is amortised at ~30s
+/// and two receivers sharing a slot number don't collide in the cache.
+async fn probe_unifying_slot(
+    channel: &Arc<HidppChannel>,
+    event: &UnifyingDeviceConnection,
+    receiver_uid: &str,
+    cache: &HashMap<CacheKey, Cached>,
+    tick: u64,
+) -> Option<(PairedDevice, CacheOutcome)> {
+    let slot = event.index;
+    let codename = read_codename(channel, slot).await;
+    debug!(
+        slot,
+        online = event.online,
+        wpid = format_args!("{:04x}", event.wpid),
+        kind = ?event.kind,
+        codename = ?codename,
+        "unifying paired slot"
+    );
+
+    // Cache key: full receiver serial + slot so two Unifying receivers with
+    // a device on the same slot number never share a cache entry.
+    let id = CacheKey::UnifyingSlot {
+        receiver_uid: receiver_uid.to_string(),
+        slot,
+    };
+    let cached = cache.get(&id);
+    let register_kind = map_unifying_kind(event.kind);
+
+    let probe_result = timeout(
+        UNIFYING_SLOT_PROBE,
+        probe_or_reuse(channel, slot, Some(id.clone()), cached, event.online, tick),
+    )
+    .await;
+    let (probe, outcome) = if let Ok(r) = probe_result {
+        r
+    } else {
+        debug!(slot, budget = ?UNIFYING_SLOT_PROBE,
+            "Unifying slot probe timed out; using cached data if available");
+        let probe = cached.map_or_else(ProbedFeatures::default, |c| c.probe.clone());
+        (probe, CacheOutcome::Seen(id))
+    };
+
+    let device = PairedDevice {
+        slot,
+        codename,
+        wpid: Some(event.wpid),
+        kind: resolve_device_kind(probe.kind, register_kind),
+        online: event.online,
+        battery: probe.battery,
+        model_info: probe.model_info,
+        capabilities: probe.capabilities,
+    };
+    Some((device, outcome))
 }
 
 /// Reads a paired device's codename, working around a slicing bug in
@@ -763,6 +954,19 @@ fn map_kind(k: BoltDeviceKind) -> DeviceKind {
     }
 }
 
+fn map_unifying_kind(k: UnifyingDeviceKind) -> DeviceKind {
+    match k {
+        UnifyingDeviceKind::Keyboard => DeviceKind::Keyboard,
+        UnifyingDeviceKind::Mouse => DeviceKind::Mouse,
+        UnifyingDeviceKind::Numpad => DeviceKind::Numpad,
+        UnifyingDeviceKind::Presenter => DeviceKind::Presenter,
+        UnifyingDeviceKind::Remote => DeviceKind::Remote,
+        UnifyingDeviceKind::Trackball => DeviceKind::Trackball,
+        UnifyingDeviceKind::Touchpad => DeviceKind::Touchpad,
+        _ => DeviceKind::Unknown,
+    }
+}
+
 /// Map the HID++ `0x0005` marketing device type to our [`DeviceKind`]. Types we
 /// don't model (receiver, webcam, dock, …) fall back to [`DeviceKind::Unknown`].
 fn map_device_type(ty: HidppDeviceType) -> DeviceKind {
@@ -831,7 +1035,8 @@ mod tests {
 
     use super::{
         CACHE_MISS_GRACE, CacheKey, Cached, DeviceKind, Enumerator, ProbedFeatures, REFRESH_TICKS,
-        UnifiedBatteryFeature, battery_feature_index, is_stale, resolve_device_kind,
+        UnifiedBatteryFeature, UnifyingDeviceKind, battery_feature_index, is_stale,
+        map_unifying_kind, resolve_device_kind,
     };
     use hidpp::feature::CreatableFeature as _;
 
@@ -959,5 +1164,26 @@ mod tests {
             resolve_device_kind(None, DeviceKind::Unknown),
             DeviceKind::Unknown
         );
+    }
+
+    #[test]
+    fn unifying_kind_maps_all_variants() {
+        let cases = [
+            (UnifyingDeviceKind::Unknown, DeviceKind::Unknown),
+            (UnifyingDeviceKind::Keyboard, DeviceKind::Keyboard),
+            (UnifyingDeviceKind::Mouse, DeviceKind::Mouse),
+            (UnifyingDeviceKind::Numpad, DeviceKind::Numpad),
+            (UnifyingDeviceKind::Presenter, DeviceKind::Presenter),
+            (UnifyingDeviceKind::Remote, DeviceKind::Remote),
+            (UnifyingDeviceKind::Trackball, DeviceKind::Trackball),
+            (UnifyingDeviceKind::Touchpad, DeviceKind::Touchpad),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                map_unifying_kind(input),
+                expected,
+                "kind {input:?} mapped incorrectly"
+            );
+        }
     }
 }

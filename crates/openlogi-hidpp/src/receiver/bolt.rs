@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use crate::receiver::ListenerDropGuard;
 use derive_builder::Builder;
 use futures::{FutureExt, pin_mut, select};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -92,7 +93,7 @@ pub enum InfoSubRegister {
 pub struct Receiver {
     chan: Arc<HidppChannel>,
     emitter: Arc<EventEmitter<Event>>,
-    msg_listener_hdl: u32,
+    _listener: Arc<ListenerDropGuard>,
 }
 
 impl Receiver {
@@ -229,9 +230,12 @@ impl Receiver {
         });
 
         Ok(Receiver {
+            _listener: Arc::new(ListenerDropGuard {
+                chan: Arc::clone(&chan),
+                hdl,
+            }),
             chan,
             emitter,
-            msg_listener_hdl: hdl,
         })
     }
 
@@ -516,12 +520,6 @@ fn parse_codename(response: &[u8; 16]) -> Option<&str> {
     let end = 3usize.saturating_add(usize::from(response[2]));
     let raw = response.get(3..end.min(response.len()))?;
     str::from_utf8(raw).ok()
-}
-
-impl Drop for Receiver {
-    fn drop(&mut self) {
-        self.chan.remove_msg_listener(self.msg_listener_hdl);
-    }
 }
 
 /// Indicates which notifications are enabled and thus sent by the receiver.

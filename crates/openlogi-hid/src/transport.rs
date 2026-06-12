@@ -126,9 +126,65 @@ pub(crate) async fn enumerate_hidpp_devices() -> Result<Vec<async_hid::Device>, 
     Ok(all
         .into_iter()
         .filter(|d| {
-            d.vendor_id == LOGITECH_VID && is_hidpp_long_collection(d.usage_page, d.usage_id)
+            d.vendor_id == LOGITECH_VID
+                && is_hidpp_long_collection(d.usage_page, d.usage_id)
+                && !is_receiver_child_node(&d.id)
         })
         .collect())
+}
+
+/// Returns `true` when a HID++ node is a virtual per-device interface created by
+/// the `hid-logitech-dj` kernel driver as a child of a Unifying or Bolt receiver.
+///
+/// On Linux, each device paired to a Unifying receiver gets its own hidraw node
+/// whose sysfs path is a subdirectory of the receiver's HID device path. These
+/// nodes expose the same HID++ long-report collection as the receiver, but HID++
+/// communication must go through the receiver node, not these child nodes.
+/// Probing them directly causes long timeouts and produces no useful inventory.
+///
+/// Detection: the sysfs path of a child node looks like
+/// `.../0003:046D:C52B.0009/0003:046D:4076.000A`
+/// while the receiver itself ends at `…/0003:046D:C52B.0009`. We check whether
+/// any known receiver PID appears as a *parent directory* component in the path.
+#[cfg(target_os = "linux")]
+fn is_receiver_child_node(id: &async_hid::DeviceId) -> bool {
+    use async_hid::DeviceId;
+    let DeviceId::DevPath(dev_path) = id else {
+        return false;
+    };
+    let Some(node_name) = dev_path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let sysfs_link = format!("/sys/class/hidraw/{node_name}/device");
+    let Ok(real_path) = std::fs::canonicalize(&sysfs_link) else {
+        return false;
+    };
+    is_receiver_child_sysfs_path(&real_path.to_string_lossy())
+}
+
+/// Determines whether a resolved sysfs path belongs to a device that is a
+/// child of a known receiver. Separated from `is_receiver_child_node` so it
+/// can be unit-tested without filesystem access.
+#[cfg(any(target_os = "linux", test))]
+fn is_receiver_child_sysfs_path(path: &str) -> bool {
+    // Build parent-component markers from the canonical PID lists so adding a
+    // new receiver PID only needs to be done in one place (route.rs).
+    // The kernel HID device name format is "BUS:VID:PID.IFACE" with uppercase hex.
+    crate::BOLT_PIDS
+        .iter()
+        .chain(crate::UNIFYING_PIDS.iter())
+        .any(|&pid| {
+            let marker = format!(":{LOGITECH_VID:04X}:{pid:04X}.");
+            // A parent component contains the marker followed by at least one
+            // more "/" — it is not the terminal component of the path.
+            path.find(&marker)
+                .is_some_and(|idx| path[idx + marker.len()..].contains('/'))
+        })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_receiver_child_node(_id: &async_hid::DeviceId) -> bool {
+    false
 }
 
 /// Open the raw HID writer for a directly-attached (USB) device, for sending
@@ -601,5 +657,37 @@ mod tests {
             r"\\?\HID#VID_046D&PID_C52B&MI_02&Col02#7&1a2b3c4d&0&0001#{4d1e55b2-f16f-11cf-88cb-001111000030}",
         );
         assert_ne!(bolt, unifying);
+    }
+
+    // Sysfs path: child of Unifying receiver
+    const UNIFYING_CHILD: &str = "/sys/devices/pci0000:00/0000:00:14.0/usb3/3-5/3-5.4/3-5.4.3/\
+         3-5.4.3:1.2/0003:046D:C52B.0009/0003:046D:4076.000A";
+    // Sysfs path: the Unifying receiver node itself (terminal component has C52B)
+    const UNIFYING_RECEIVER: &str = "/sys/devices/pci0000:00/0000:00:14.0/usb3/3-5/3-5.4/3-5.4.3/\
+         3-5.4.3:1.2/0003:046D:C52B.0009";
+    // Sysfs path: child of Bolt receiver
+    const BOLT_CHILD: &str = "/sys/devices/pci0000:00/0000:00:14.0/usb3/3-5/\
+         0003:046D:C548.0001/0003:046D:B037.0002";
+    // Sysfs path: unrelated non-Logitech device
+    const UNRELATED: &str = "/sys/devices/pci0000:00/0000:00:15.0/i2c-0/0018:06CB:CE67.0001";
+
+    #[test]
+    fn child_of_unifying_receiver_is_detected() {
+        assert!(is_receiver_child_sysfs_path(UNIFYING_CHILD));
+    }
+
+    #[test]
+    fn unifying_receiver_itself_is_not_a_child() {
+        assert!(!is_receiver_child_sysfs_path(UNIFYING_RECEIVER));
+    }
+
+    #[test]
+    fn child_of_bolt_receiver_is_detected() {
+        assert!(is_receiver_child_sysfs_path(BOLT_CHILD));
+    }
+
+    #[test]
+    fn unrelated_device_is_not_a_child() {
+        assert!(!is_receiver_child_sysfs_path(UNRELATED));
     }
 }

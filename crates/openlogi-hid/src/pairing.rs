@@ -67,10 +67,6 @@ mod notif {
 /// big-endian. Both must be set for the receiver to stream pairing events.
 const NOTIF_FLAGS: [u8; 3] = [0x00, 0x09, 0x00];
 
-/// Product IDs (vendor `0x046d`) of supported pairing-capable receivers.
-const BOLT_PRODUCT_IDS: &[u16] = &[0xc548];
-const UNIFYING_PRODUCT_IDS: &[u16] = &[0xc52b, 0xc532];
-
 /// Receiver pairing family. Each uses a different register flow.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReceiverFamily {
@@ -79,9 +75,9 @@ pub enum ReceiverFamily {
 }
 
 fn family_for(product_id: u16) -> Option<ReceiverFamily> {
-    if BOLT_PRODUCT_IDS.contains(&product_id) {
+    if crate::BOLT_PIDS.contains(&product_id) {
         Some(ReceiverFamily::Bolt)
-    } else if UNIFYING_PRODUCT_IDS.contains(&product_id) {
+    } else if crate::UNIFYING_PIDS.contains(&product_id) {
         Some(ReceiverFamily::Unifying)
     } else {
         None
