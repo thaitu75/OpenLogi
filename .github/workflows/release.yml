@@ -23,6 +23,7 @@ jobs:
   macos:
     name: macOS DMG (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    if: ${{ github.repository == 'AprilNEA/OpenLogi' || secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -219,6 +220,7 @@ jobs:
       # client/tenant/subscription IDs are not secrets under OIDC, but are centralised
       # here so all release config has a single source of truth.
       - name: Load Azure signing config from 1Password
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
         id: azure_config
         uses: 1password/load-secrets-action@v4
         with:
@@ -237,6 +239,7 @@ jobs:
       # empty fields — without this gate the job only fails minutes later, in
       # azure/login, with an error that never names the real cause.
       - name: Validate Azure signing config
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
         shell: bash
         env:
           AZURE_CLIENT_ID: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
@@ -254,18 +257,18 @@ jobs:
           : "${AZURE_SIGNING_ACCOUNT:?Configure AZURE_SIGNING_ACCOUNT in the Azure 1Password item}"
           : "${AZURE_CERT_PROFILE:?Configure AZURE_CERT_PROFILE in the Azure 1Password item}"
 
-      # The exe IS the product on Windows — no separate CLI artifact will ever
-      # ship there (cargo install covers that audience), so job and artifact
-      # names carry no GUI qualifier. The headless agent (ported in #167)
-      # joins the artifact set once it has been runtime-tested on a real
-      # Windows box.
+      # Build the GUI and the headless agent. The GUI exe is the main product,
+      # and the agent is the background service owner of HID++ and hook.
       - name: Build OpenLogi
-        run: cargo build --release -p openlogi-gui --target ${{ matrix.target }}
+        run: |
+          cargo build --release -p openlogi-gui --target ${{ matrix.target }}
+          cargo build --release -p openlogi-agent --target ${{ matrix.target }}
 
       # Federated (passwordless) login. Requires an app registration whose federated
       # credential subject is `repo:AprilNEA/OpenLogi:environment:release`, granted the
       # "Artifact Signing Certificate Profile Signer" role on the signing account.
       - name: Azure login (OIDC)
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
         uses: azure/login@v3
         with:
           client-id: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
@@ -276,6 +279,7 @@ jobs:
       # runs on Windows runners. azure/login leaves an az CLI session that the action's
       # default AzureCliCredential picks up, so no azure-* secret inputs are needed.
       - name: Sign openlogi-gui.exe with Artifact Signing
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
@@ -293,34 +297,59 @@ jobs:
           # per-tag refs no future run can restore, so skip them.
           cache-dependencies: false
 
-      - name: Verify the binary is signed
+      - name: Sign openlogi-agent.exe with Artifact Signing
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ steps.azure_config.outputs.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ steps.azure_config.outputs.AZURE_CERT_PROFILE }}
+          files: ${{ github.workspace }}\target\${{ matrix.target }}\release\openlogi-agent.exe
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          cache-dependencies: false
+
+      - name: Verify the binaries are signed
         shell: pwsh
         run: |
-          $sig = Get-AuthenticodeSignature target\${{ matrix.target }}\release\openlogi-gui.exe
-          $sig | Format-List
-          # The signing step above already fails on error; this guards against it
-          # silently producing an unsigned or corrupted binary. NotSigned and
-          # HashMismatch (bytes no longer match the signature) are trust-store
-          # independent and always ship-blockers; NotTrusted/UnknownError depend
-          # on the runner's trust store, so they stay log-only.
-          if ($null -eq $sig.SignerCertificate -or
-              "$($sig.Status)" -in 'NotSigned', 'HashMismatch') {
-            Write-Error "openlogi-gui.exe Authenticode signature is invalid: $($sig.Status)"
-            exit 1
+          foreach ($file in @('openlogi-gui.exe', 'openlogi-agent.exe')) {
+            $path = "target\${{ matrix.target }}\release\$file"
+            $sig = Get-AuthenticodeSignature $path
+            $sig | Format-List
+            # The signing step above already fails on error; this guards against it
+            # silently producing an unsigned or corrupted binary. NotSigned and
+            # HashMismatch (bytes no longer match the signature) are trust-store
+            # independent and always ship-blockers; NotTrusted/UnknownError depend
+            # on the runner's trust store, so they stay log-only.
+            if ($null -eq $sig.SignerCertificate -or
+                "$($sig.Status)" -in 'NotSigned', 'HashMismatch') {
+              if ("${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}" -ne "") {
+                Write-Error "$file Authenticode signature is invalid: $($sig.Status)"
+                exit 1
+              } else {
+                Write-Warning "Skipping signature validation enforcement on fork: $file is not signed."
+              }
+            }
           }
 
-      - name: Collect signed exe artifact
+      - name: Collect signed exe artifacts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           # Renaming after signing is safe: Authenticode lives in the PE file.
           $ref = $env:GITHUB_REF_NAME -replace '/', '-'
+          # The GUI exe renamed for direct download
           Copy-Item target\${{ matrix.target }}\release\openlogi-gui.exe "dist\OpenLogi-$ref-windows-${{ matrix.arch }}.exe"
+          # Keep the original names in a subfolder for packaging
+          New-Item -ItemType Directory -Force -Path dist\raw | Out-Null
+          Copy-Item target\${{ matrix.target }}\release\openlogi-gui.exe "dist\raw\openlogi-gui.exe"
+          Copy-Item target\${{ matrix.target }}\release\openlogi-agent.exe "dist\raw\openlogi-agent.exe"
 
       - uses: actions/upload-artifact@v7
         with:
           name: OpenLogi-windows-${{ matrix.arch }}
-          path: dist/*.exe
+          path: |
+            dist/*.exe
+            dist/raw/*
           # 'warn' (the default) would let a no-exe job stay green, and publish
           # would then die at the by-name download instead of shipping DMG-only.
           if-no-files-found: error
@@ -361,6 +390,7 @@ jobs:
           path: signed-exe
 
       - name: Load Azure signing config from 1Password
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
         id: azure_config
         uses: 1password/load-secrets-action@v4
         with:
@@ -375,6 +405,7 @@ jobs:
           AZURE_CERT_PROFILE: ${{ secrets.OP_AZURE_SECRET_ITEM }}/AZURE_CERT_PROFILE
 
       - name: Validate Azure signing config
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
         shell: bash
         env:
           AZURE_CLIENT_ID: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
@@ -408,23 +439,22 @@ jobs:
           } else {
             $version = '0.0.0'
           }
-          $exe = Get-ChildItem signed-exe\*.exe | Select-Object -First 1
-          # Upstream invariants (upload's if-no-files-found: error, the
-          # by-name download) should make this unreachable; the guard turns a
-          # confusing "$null.FullName -> empty -d ExeFile" wix error into a
-          # named cause if those invariants ever shift.
-          if ($null -eq $exe) {
-            Write-Error "No signed exe found in signed-exe\ — nothing to package"
+          $gui = "signed-exe\raw\openlogi-gui.exe"
+          $agent = "signed-exe\raw\openlogi-agent.exe"
+          if (!(Test-Path $gui) -or !(Test-Path $agent)) {
+            Write-Error "Signed executables not found in signed-exe\raw\ — nothing to package"
             exit 1
           }
           New-Item -ItemType Directory -Force -Path out | Out-Null
           wix build packaging\windows\OpenLogi.wxs `
             -arch ${{ matrix.msi_platform }} `
             -d Version=$version `
-            -d ExeFile="$($exe.FullName)" `
+            -d ExeFile="$gui" `
+            -d AgentFile="$agent" `
             -o out\OpenLogi.msi
 
       - name: Azure login (OIDC)
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
         uses: azure/login@v3
         with:
           client-id: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
@@ -432,6 +462,7 @@ jobs:
           subscription-id: ${{ steps.azure_config.outputs.AZURE_SUBSCRIPTION_ID }}
 
       - name: Sign OpenLogi.msi with Artifact Signing
+        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
@@ -451,8 +482,12 @@ jobs:
           # independent ship-blockers; NotTrusted/UnknownError stay log-only.
           if ($null -eq $sig.SignerCertificate -or
               "$($sig.Status)" -in 'NotSigned', 'HashMismatch') {
-            Write-Error "OpenLogi.msi Authenticode signature is invalid: $($sig.Status)"
-            exit 1
+            if ("${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}" -ne "") {
+              Write-Error "OpenLogi.msi Authenticode signature is invalid: $($sig.Status)"
+              exit 1
+            } else {
+              Write-Warning "Skipping MSI signature validation enforcement on fork: MSI is not signed."
+            }
           }
 
       - name: Collect signed MSI artifact

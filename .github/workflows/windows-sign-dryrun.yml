@@ -75,7 +75,9 @@ jobs:
           : "${AZURE_CERT_PROFILE:?Configure AZURE_CERT_PROFILE in the Azure 1Password item}"
 
       - name: Build OpenLogi
-        run: cargo build --release -p openlogi-gui --target ${{ matrix.target }}
+        run: |
+          cargo build --release -p openlogi-gui --target ${{ matrix.target }}
+          cargo build --release -p openlogi-agent --target ${{ matrix.target }}
 
       - name: Azure login (OIDC)
         uses: azure/login@v3
@@ -96,16 +98,29 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           cache-dependencies: false
 
-      - name: Verify the binary is signed
+      - name: Sign openlogi-agent.exe with Artifact Signing
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ steps.azure_config.outputs.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ steps.azure_config.outputs.AZURE_CERT_PROFILE }}
+          files: ${{ github.workspace }}\target\${{ matrix.target }}\release\openlogi-agent.exe
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          cache-dependencies: false
+
+      - name: Verify the binaries are signed
         shell: pwsh
         run: |
-          $sig = Get-AuthenticodeSignature target\${{ matrix.target }}\release\openlogi-gui.exe
-          $sig | Format-List
-          # NotSigned and HashMismatch are trust-store independent and always
-          # ship-blockers; NotTrusted/UnknownError depend on the runner's
-          # trust store, so they stay log-only.
-          if ($null -eq $sig.SignerCertificate -or
-              "$($sig.Status)" -in 'NotSigned', 'HashMismatch') {
-            Write-Error "openlogi-gui.exe Authenticode signature is invalid: $($sig.Status)"
-            exit 1
+          foreach ($file in @('openlogi-gui.exe', 'openlogi-agent.exe')) {
+            $path = "target\${{ matrix.target }}\release\$file"
+            $sig = Get-AuthenticodeSignature $path
+            $sig | Format-List
+            # NotSigned and HashMismatch are trust-store independent and always
+            # ship-blockers; NotTrusted/UnknownError depend on the runner's
+            # trust store, so they stay log-only.
+            if ($null -eq $sig.SignerCertificate -or
+                "$($sig.Status)" -in 'NotSigned', 'HashMismatch') {
+              Write-Error "$file Authenticode signature is invalid: $($sig.Status)"
+              exit 1
+            }
           }

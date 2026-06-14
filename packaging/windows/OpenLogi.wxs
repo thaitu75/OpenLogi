@@ -11,6 +11,7 @@
   - Build-time defines (passed via `wix build -d`):
       Version  numeric x.y.z ProductVersion (0.0.0 on non-tag dispatches)
       ExeFile  path to the signed openlogi-gui exe to package
+      AgentFile path to the signed openlogi-agent exe to package
 -->
 
 <!--
@@ -47,6 +48,10 @@
         <!-- Installed as plain OpenLogi.exe: inside the install dir the file
              name is the product name. -->
         <File Id="OpenLogiExe" Name="OpenLogi.exe" Source="$(var.ExeFile)" KeyPath="yes" />
+      </Component>
+      <Component Id="AgentExecutable">
+        <!-- Installed as openlogi-agent.exe next to OpenLogi.exe -->
+        <File Id="OpenLogiAgentExe" Name="openlogi-agent.exe" Source="$(var.AgentFile)" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
