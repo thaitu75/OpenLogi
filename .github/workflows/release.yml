@@ -20,10 +20,29 @@ env:
   DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
 jobs:
+  check-secrets:
+    name: Check if secrets are available
+    runs-on: ubuntu-latest
+    outputs:
+      has_secrets: ${{ steps.check.outputs.has_secrets }}
+    steps:
+      - name: Check secrets presence
+        id: check
+        shell: bash
+        env:
+          OP_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          if [ -n "$OP_TOKEN" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+          fi
+
   macos:
     name: macOS DMG (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    if: ${{ github.repository == 'AprilNEA/OpenLogi' || secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+    needs: check-secrets
+    if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -170,6 +189,7 @@ jobs:
 
   windows:
     name: Windows EXE (${{ matrix.arch }})
+    needs: check-secrets
     # Both arches build on the x86_64 runner — arm64 as an MSVC cross-compile.
     # Native Arm runners are not an option: artifact-signing-action refuses to
     # run on them, while the signing itself is arch-agnostic over the PE file.
@@ -220,7 +240,7 @@ jobs:
       # client/tenant/subscription IDs are not secrets under OIDC, but are centralised
       # here so all release config has a single source of truth.
       - name: Load Azure signing config from 1Password
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         id: azure_config
         uses: 1password/load-secrets-action@v4
         with:
@@ -239,7 +259,7 @@ jobs:
       # empty fields — without this gate the job only fails minutes later, in
       # azure/login, with an error that never names the real cause.
       - name: Validate Azure signing config
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         shell: bash
         env:
           AZURE_CLIENT_ID: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
@@ -268,7 +288,7 @@ jobs:
       # credential subject is `repo:AprilNEA/OpenLogi:environment:release`, granted the
       # "Artifact Signing Certificate Profile Signer" role on the signing account.
       - name: Azure login (OIDC)
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         uses: azure/login@v3
         with:
           client-id: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
@@ -279,7 +299,7 @@ jobs:
       # runs on Windows runners. azure/login leaves an az CLI session that the action's
       # default AzureCliCredential picks up, so no azure-* secret inputs are needed.
       - name: Sign openlogi-gui.exe with Artifact Signing
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
@@ -298,7 +318,7 @@ jobs:
           cache-dependencies: false
 
       - name: Sign openlogi-agent.exe with Artifact Signing
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
@@ -322,7 +342,7 @@ jobs:
             # on the runner's trust store, so they stay log-only.
             if ($null -eq $sig.SignerCertificate -or
                 "$($sig.Status)" -in 'NotSigned', 'HashMismatch') {
-              if ("${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}" -ne "") {
+              if ("${{ needs.check-secrets.outputs.has_secrets }}" -eq "true") {
                 Write-Error "$file Authenticode signature is invalid: $($sig.Status)"
                 exit 1
               } else {
@@ -357,7 +377,7 @@ jobs:
   windows-msi:
     name: Windows MSI (${{ matrix.arch }})
     runs-on: windows-2025
-    needs: windows
+    needs: [check-secrets, windows]
     # `needs` only orders the jobs; this gate runs the MSI legs even when the
     # windows matrix AGGREGATE failed. The by-name artifact download below
     # then fails exactly the leg whose exe never shipped, and the other arch
@@ -390,7 +410,7 @@ jobs:
           path: signed-exe
 
       - name: Load Azure signing config from 1Password
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         id: azure_config
         uses: 1password/load-secrets-action@v4
         with:
@@ -405,7 +425,7 @@ jobs:
           AZURE_CERT_PROFILE: ${{ secrets.OP_AZURE_SECRET_ITEM }}/AZURE_CERT_PROFILE
 
       - name: Validate Azure signing config
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         shell: bash
         env:
           AZURE_CLIENT_ID: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
@@ -454,7 +474,7 @@ jobs:
             -o out\OpenLogi.msi
 
       - name: Azure login (OIDC)
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         uses: azure/login@v3
         with:
           client-id: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
@@ -462,7 +482,7 @@ jobs:
           subscription-id: ${{ steps.azure_config.outputs.AZURE_SUBSCRIPTION_ID }}
 
       - name: Sign OpenLogi.msi with Artifact Signing
-        if: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN != '' }}
+        if: ${{ needs.check-secrets.outputs.has_secrets == 'true' }}
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
@@ -482,7 +502,7 @@ jobs:
           # independent ship-blockers; NotTrusted/UnknownError stay log-only.
           if ($null -eq $sig.SignerCertificate -or
               "$($sig.Status)" -in 'NotSigned', 'HashMismatch') {
-            if ("${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}" -ne "") {
+            if ("${{ needs.check-secrets.outputs.has_secrets }}" -eq "true") {
               Write-Error "OpenLogi.msi Authenticode signature is invalid: $($sig.Status)"
               exit 1
             } else {
@@ -506,9 +526,10 @@ jobs:
 
   release-notes:
     name: Generate release notes
+    needs: check-secrets
     # Tag runs only: the generator diffs from the previous tag, and its only
     # consumer (publish) is tag-gated too.
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ github.ref_type == 'tag' && needs.check-secrets.outputs.has_secrets == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
